@@ -5,4 +5,5 @@ import app from '../server.js'
 
 // Vercel Serverless Functions
 // Express app est déjà configuré pour gérer les requêtes
+// Le middleware d'erreur dans server.js capture les erreurs non gérées
 export default app

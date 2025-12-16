@@ -57,6 +57,28 @@ if (SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY) {
 app.use(cors())
 app.use(express.json({ limit: '50mb' }))
 
+// Gestionnaire d'erreur global pour éviter les crashes
+app.use((err, req, res, next) => {
+  console.error('❌ Erreur non gérée:', err)
+  res.status(500).json({
+    error: 'Internal server error',
+    message: process.env.NODE_ENV === 'production' ? 'An error occurred' : err.message
+  })
+})
+
+// Gestionnaire pour les promesses non gérées
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('❌ Unhandled Rejection at:', promise, 'reason:', reason)
+})
+
+process.on('uncaughtException', (error) => {
+  console.error('❌ Uncaught Exception:', error)
+  // Ne pas faire process.exit() sur Vercel
+  if (!process.env.VERCEL && !process.env.VERCEL_ENV) {
+    process.exit(1)
+  }
+})
+
 // 🔐 AUTH MIDDLEWARE
 app.use((req, res, next) => {
   // Autoriser le healthcheck
