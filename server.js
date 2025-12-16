@@ -1,12 +1,13 @@
 import express from 'express'
 import cors from 'cors'
 import { createClient } from '@supabase/supabase-js'
+import dotenv from 'dotenv'
 
-// Note: Sur Vercel, les variables d'environnement sont automatiquement chargées
-// Pour le développement local, utilisez:
-// - node --env-file=.env server.js (Node.js 20.6+)
-// - ou exportez les variables dans votre terminal
-// - ou utilisez un outil comme dotenv-cli: npx dotenv-cli node server.js
+// Charger dotenv seulement si on n'est pas sur Vercel
+// Render et autres plateformes nécessitent dotenv
+if (!process.env.VERCEL && !process.env.VERCEL_ENV) {
+  dotenv.config()
+}
 
 const app = express()
 
