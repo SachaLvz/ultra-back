@@ -517,23 +517,8 @@ app.post('/add-roadmap', async (req, res) => {
     // Trouver le coach (optionnel)
     let coachId = null
 
-    // Vérifier si un coach_id est fourni dans le payload
-    const providedCoachId = body.coach_id || null
-    if (providedCoachId) {
-      const { data: coachProfile } = await supabase
-        .from('profiles')
-        .select('id')
-        .eq('id', providedCoachId)
-        .eq('role', 'coach')
-        .single()
-      
-      if (coachProfile) {
-        coachId = providedCoachId
-      }
-    }
-
-    // Si un coach_email est fourni dans les données, chercher le coach existant
-    if (!coachId && coachInfo.coach_email) {
+    // Chercher d'abord par email si un coach_email est fourni dans les données
+    if (coachInfo.coach_email) {
       const { data: existingCoach } = await supabase
         .from('profiles')
         .select('id')
@@ -543,6 +528,23 @@ app.post('/add-roadmap', async (req, res) => {
 
       if (existingCoach) {
         coachId = existingCoach.id
+      }
+    }
+
+    // Si aucun coach n'a été trouvé par email, chercher par ID comme fallback
+    if (!coachId) {
+      const providedCoachId = body.coach_id || null
+      if (providedCoachId) {
+        const { data: coachProfile } = await supabase
+          .from('profiles')
+          .select('id')
+          .eq('id', providedCoachId)
+          .eq('role', 'coach')
+          .single()
+        
+        if (coachProfile) {
+          coachId = providedCoachId
+        }
       }
     }
 
