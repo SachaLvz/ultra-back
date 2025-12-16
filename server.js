@@ -920,6 +920,81 @@ app.post('/add-roadmap', async (req, res) => {
         if (pillarError) {
           console.error(`Error upserting pillar ${pillar.pillar_type}:`, pillarError)
         }
+
+        // Créer des tâches à partir des actions du pilier (uniquement si coachId existe)
+        if (coachId && pillar.actions && pillar.actions.length > 0) {
+          // Répartir les actions sur les 16 semaines de manière équilibrée
+          const actionsPerWeek = Math.ceil(pillar.actions.length / 16)
+          
+          for (let i = 0; i < pillar.actions.length; i++) {
+            const action = pillar.actions[i]
+            if (!action || !action.trim() || !action.trim().startsWith('-')) continue
+            
+            // Calculer la semaine (1-16) en répartissant équitablement
+            const weekNumber = Math.min(16, Math.max(1, Math.floor(i / actionsPerWeek) + 1))
+            
+            let actionText = action.replace(/^-\s*/, '').trim()
+            if (!actionText) continue
+            
+            // Créer un titre simple et court (première phrase ou 10-12 mots max)
+            let taskTitle = actionText
+            // Si l'action contient plusieurs phrases, prendre seulement la première
+            const firstSentence = actionText.split(/[.!?]\s+/)[0].trim()
+            if (firstSentence.length > 0 && firstSentence.length < actionText.length * 0.8) {
+              taskTitle = firstSentence
+            }
+            
+            // Limiter à 12 mots maximum
+            const words = taskTitle.split(/\s+/)
+            if (words.length > 12) {
+              taskTitle = words.slice(0, 12).join(' ')
+            }
+            
+            // Limiter à 100 caractères pour le titre
+            taskTitle = taskTitle.substring(0, 100).trim()
+            
+            // La description contient l'action complète si elle est plus longue
+            const taskDescription = actionText.length > taskTitle.length ? actionText : null
+            
+            // Mapper le pillar_type au format attendu
+            let pillarType = 'structure'
+            if (pillar.pillar_type === 'acquisition') {
+              pillarType = 'acquisition'
+            } else if (pillar.pillar_type === 'vision') {
+              pillarType = 'vision'
+            }
+            
+            // Vérifier si la tâche existe déjà
+            const { data: existingTasks } = await supabase
+              .from('coaching_tasks')
+              .select('id')
+              .eq('client_id', clientProfileId)
+              .eq('week_number', weekNumber)
+              .ilike('title', `%${taskTitle.substring(0, 50)}%`)
+              .limit(1)
+
+            if (!existingTasks || existingTasks.length === 0) {
+              const { error: taskError } = await supabase
+                .from('coaching_tasks')
+                .insert({
+                  coach_id: coachId,
+                  client_id: clientProfileId,
+                  title: taskTitle,
+                  description: taskDescription,
+                  week_number: weekNumber,
+                  status: 'pending',
+                  priority: 'medium',
+                  pillar: pillarType
+                })
+
+              if (taskError) {
+                console.error(`Error creating task from pillar ${pillar.pillar_type} for week ${weekNumber}:`, taskError)
+              } else {
+                console.log(`✅ Tâche créée depuis pilier: "${taskTitle}" (semaine ${weekNumber}, pilier: ${pillarType})`)
+              }
+            }
+          }
+        }
       }
     }
 
@@ -970,15 +1045,51 @@ app.post('/add-roadmap', async (req, res) => {
           if (coachId) {
             const actions = weekAction.split('\n').filter(a => a.trim() && a.trim().startsWith('-'))
             for (const action of actions) {
-              const actionText = action.replace(/^-\s*/, '').trim()
+              let actionText = action.replace(/^-\s*/, '').trim()
               if (actionText) {
+                // Créer un titre simple et court (première phrase ou 10-12 mots max)
+                let taskTitle = actionText
+                // Si l'action contient plusieurs phrases, prendre seulement la première
+                const firstSentence = actionText.split(/[.!?]\s+/)[0].trim()
+                if (firstSentence.length > 0 && firstSentence.length < actionText.length * 0.8) {
+                  taskTitle = firstSentence
+                }
+                
+                // Limiter à 12 mots maximum
+                const words = taskTitle.split(/\s+/)
+                if (words.length > 12) {
+                  taskTitle = words.slice(0, 12).join(' ')
+                }
+                
+                // Limiter à 100 caractères pour le titre
+                taskTitle = taskTitle.substring(0, 100).trim()
+                
+                // La description contient l'action complète si elle est plus longue
+                const taskDescription = actionText.length > taskTitle.length ? actionText : null
+                
+                // Déterminer le pilier selon le contexte
+                let pillar = 'structure' // par défaut
+                if (weekAction.toLowerCase().includes('marketing') || 
+                    weekAction.toLowerCase().includes('ads') || 
+                    weekAction.toLowerCase().includes('acquisition') ||
+                    weekAction.toLowerCase().includes('influenceur') ||
+                    weekAction.toLowerCase().includes('instagram') ||
+                    weekAction.toLowerCase().includes('prospection')) {
+                  pillar = 'acquisition'
+                } else if (weekAction.toLowerCase().includes('pilotage') ||
+                           weekAction.toLowerCase().includes('kpi') ||
+                           weekAction.toLowerCase().includes('tableau de bord') ||
+                           weekAction.toLowerCase().includes('objectif')) {
+                  pillar = 'vision'
+                }
+                
                 // Vérifier si la tâche existe déjà
                 const { data: existingTasks } = await supabase
                   .from('coaching_tasks')
                   .select('id')
                   .eq('client_id', clientProfileId)
                   .eq('week_number', weekNumber)
-                  .ilike('title', `%${actionText.substring(0, 50)}%`)
+                  .ilike('title', `%${taskTitle.substring(0, 50)}%`)
                   .limit(1)
 
                 if (!existingTasks || existingTasks.length === 0) {
@@ -987,15 +1098,18 @@ app.post('/add-roadmap', async (req, res) => {
                     .insert({
                       coach_id: coachId,
                       client_id: clientProfileId,
-                      title: actionText.substring(0, 200),
-                      description: actionText.length > 200 ? actionText : null,
+                      title: taskTitle,
+                      description: taskDescription,
                       week_number: weekNumber,
                       status: 'pending',
-                      priority: 'medium'
+                      priority: 'medium',
+                      pillar: pillar
                     })
 
                   if (taskError) {
                     console.error(`Error creating task for week ${weekNumber}:`, taskError)
+                  } else {
+                    console.log(`✅ Tâche créée: "${taskTitle}" (semaine ${weekNumber}, pilier: ${pillar})`)
                   }
                 }
               }
@@ -1101,6 +1215,139 @@ app.post('/add-roadmap', async (req, res) => {
           console.error('Error upserting client metrics:', metricsError)
         }
       }
+    }
+
+    // 5. Créer les tâches et notes à partir de l'analyse de l'edge function (uniquement si coachClientId existe)
+    if (coachClientId && coachId && roadmapAnalysis) {
+      console.log('📝 Création des tâches et notes à partir de l\'analyse...')
+      
+      // Créer les tâches extraites par l'analyse
+      if (roadmapAnalysis.tasks && roadmapAnalysis.tasks.length > 0) {
+        console.log(`📋 Création de ${roadmapAnalysis.tasks.length} tâches...`)
+        
+        for (const task of roadmapAnalysis.tasks) {
+          // Vérifier que la tâche a les champs requis
+          if (!task.title || !task.week_number) {
+            console.warn('⚠️  Tâche ignorée (titre ou semaine manquant):', task)
+            continue
+          }
+
+          // S'assurer que week_number est entre 1 et 16
+          const weekNumber = Math.max(1, Math.min(16, parseInt(task.week_number) || 1))
+          
+          // Vérifier si la tâche existe déjà
+          const { data: existingTasks } = await supabase
+            .from('coaching_tasks')
+            .select('id')
+            .eq('client_id', clientProfileId)
+            .eq('week_number', weekNumber)
+            .ilike('title', `%${task.title.substring(0, 50)}%`)
+            .limit(1)
+
+          if (!existingTasks || existingTasks.length === 0) {
+            const { error: taskError } = await supabase
+              .from('coaching_tasks')
+              .insert({
+                coach_id: coachId,
+                client_id: clientProfileId,
+                title: task.title.substring(0, 200),
+                description: task.description || (task.title.length > 200 ? task.title : null),
+                week_number: weekNumber,
+                status: task.status || 'pending',
+                priority: task.priority || 'medium'
+              })
+
+            if (taskError) {
+              console.error(`⚠️  Erreur lors de la création de la tâche "${task.title}":`, taskError)
+            } else {
+              console.log(`✅ Tâche créée: "${task.title}" (semaine ${weekNumber})`)
+            }
+          } else {
+            console.log(`ℹ️  Tâche déjà existante, ignorée: "${task.title}"`)
+          }
+        }
+      }
+
+      // Créer/Mettre à jour les notes de semaine extraites par l'analyse
+      if (roadmapAnalysis.notes && roadmapAnalysis.notes.length > 0) {
+        console.log(`📝 Création/Mise à jour de ${roadmapAnalysis.notes.length} notes...`)
+        
+        for (const note of roadmapAnalysis.notes) {
+          if (!note.week_number || !note.comment) {
+            console.warn('⚠️  Note ignorée (semaine ou commentaire manquant):', note)
+            continue
+          }
+
+          // S'assurer que week_number est entre 1 et 16
+          const weekNumber = Math.max(1, Math.min(16, parseInt(note.week_number) || 1))
+          
+          // Récupérer la note existante si elle existe
+          const { data: existingNote } = await supabase
+            .from('coach_client_week_notes')
+            .select('comment')
+            .eq('coach_client_id', coachClientId)
+            .eq('week_number', weekNumber)
+            .maybeSingle()
+
+          // Combiner avec la note existante si elle existe
+          const combinedComment = existingNote?.comment 
+            ? `${existingNote.comment}\n\n---\n\n[Analyse IA]\n${note.comment}`
+            : `[Analyse IA]\n${note.comment}`
+
+          const { error: noteError } = await supabase
+            .from('coach_client_week_notes')
+            .upsert({
+              coach_client_id: coachClientId,
+              week_number: weekNumber,
+              comment: combinedComment,
+              updated_at: new Date().toISOString()
+            }, {
+              onConflict: 'coach_client_id,week_number'
+            })
+
+          if (noteError) {
+            console.error(`⚠️  Erreur lors de la création/mise à jour de la note (semaine ${weekNumber}):`, noteError)
+          } else {
+            console.log(`✅ Note créée/mise à jour pour la semaine ${weekNumber}`)
+          }
+        }
+      }
+
+      // Ajouter le résumé de l'analyse à la note de la semaine 1 si disponible
+      if (roadmapAnalysis.summary) {
+        const { data: existingNote } = await supabase
+          .from('coach_client_week_notes')
+          .select('comment')
+          .eq('coach_client_id', coachClientId)
+          .eq('week_number', 1)
+          .maybeSingle()
+
+        const summaryNote = `[Résumé de l'analyse IA]\n${roadmapAnalysis.summary}`
+        const combinedComment = existingNote?.comment 
+          ? `${existingNote.comment}\n\n---\n\n${summaryNote}`
+          : summaryNote
+
+        const { error: summaryError } = await supabase
+          .from('coach_client_week_notes')
+          .upsert({
+            coach_client_id: coachClientId,
+            week_number: 1,
+            comment: combinedComment,
+            updated_at: new Date().toISOString()
+          }, {
+            onConflict: 'coach_client_id,week_number'
+          })
+
+        if (summaryError) {
+          console.error('⚠️  Erreur lors de l\'ajout du résumé:', summaryError)
+        } else {
+          console.log('✅ Résumé de l\'analyse ajouté à la semaine 1')
+        }
+      }
+
+      console.log('✅ Tâches et notes de l\'analyse créées avec succès')
+    } else if (roadmapAnalysis && !coachClientId) {
+      console.log('⚠️  Analyse disponible mais aucun coach-client ID, les tâches et notes ne seront pas créées')
     }
 
     // Envoyer un email au client avec ses identifiants
