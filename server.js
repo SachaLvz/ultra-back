@@ -153,30 +153,46 @@ const parsePercentage = (value) => {
   return cleaned ? parseFloat(cleaned) : null
 }
 
-// Fonction pour générer un titre simple pour une semaine de roadmap
-const generateWeekTitleWithChatGPT = async (monthObjective, weekNumber) => {
+// Fonction pour générer un titre très court pour une semaine basé sur les actions
+const generateWeekTitleWithChatGPT = async (weekActions, weekNumber) => {
   if (!OPENAI_API_KEY) {
     return `Semaine ${weekNumber}`
   }
 
   try {
-    const prompt = `Crée un titre court et simple (maximum 5-6 mots) pour la semaine ${weekNumber} d'une roadmap de coaching basé sur cet objectif mensuel:
+    // Extraire les premières actions pour donner du contexte
+    const firstActions = weekActions
+      .split('\n')
+      .filter(a => a.trim() && a.trim().startsWith('-'))
+      .slice(0, 3)
+      .map(a => a.replace(/^-\s*/, '').trim())
+      .join(', ')
 
-OBJECTIF: ${monthObjective || 'Objectifs de la semaine'}
+    if (!firstActions || firstActions.length === 0) {
+      return `Semaine ${weekNumber}`
+    }
+
+    const prompt = `Crée un titre TRÈS COURT (2-3 mots maximum) qui décrit ce que le client doit faire pendant la semaine ${weekNumber} d'une roadmap de coaching.
+
+ACTIONS DE LA SEMAINE:
+${firstActions}
 
 Le titre doit être:
-- Court (5-6 mots maximum)
-- Simple et clair
+- TRÈS COURT (2-3 mots maximum, vraiment petit)
+- Simple et direct
 - En français
-- Actionnable ou descriptif
+- Décrit ce que le client doit faire cette semaine
+- Actionnable
 
-Exemples de bons titres:
-- "Structurer l'organisation interne"
-- "Lancer les campagnes marketing"
-- "Optimiser les processus opérationnels"
-- "Développer l'acquisition clients"
+Exemples de bons titres (2-3 mots):
+- "Structurer l'organisation"
+- "Lancer le marketing"
+- "Recruter l'équipe"
+- "Finaliser le tunnel"
+- "Optimiser les processus"
+- "Développer l'acquisition"
 
-Réponds UNIQUEMENT avec le titre, sans guillemets, sans explication.`;
+Réponds UNIQUEMENT avec le titre (2-3 mots max), sans guillemets, sans explication.`;
 
     const response = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
@@ -197,7 +213,7 @@ Réponds UNIQUEMENT avec le titre, sans guillemets, sans explication.`;
           },
         ],
         temperature: 0.3,
-        max_tokens: 30,
+        max_tokens: 15,
       }),
     })
 
@@ -1134,15 +1150,24 @@ app.post('/add-roadmap', async (req, res) => {
           const weekNumber = baseWeek + weekOffset
           const weekAction = weekActions[weekOffset] || ''
 
-          // Construire la note complète pour la semaine
-          const weekNote = `OBJECTIF MOIS ${monthIndex + 1}: ${month.objective || ''}\n\nKPIs:\n${month.kpi || ''}\n\nActions semaine ${weekNumber}:\n${weekAction}`
+          // Générer un titre très court basé sur les actions de la semaine (2-3 mots max)
+          let weekTitle = `Semaine ${weekNumber}`
+          if (weekAction && weekAction.trim().length > 0) {
+            const generatedTitle = await generateWeekTitleWithChatGPT(weekAction, weekNumber)
+            if (generatedTitle) {
+              // Limiter à 3 mots maximum pour un titre vraiment court
+              const words = generatedTitle.split(/\s+/)
+              weekTitle = words.slice(0, 3).join(' ')
+            }
+          }
 
+          // Le comment contient uniquement le titre court (ce que le client doit faire cette semaine)
           const { error: weekNoteError } = await supabase
             .from('coach_client_week_notes')
             .upsert({
               coach_client_id: coachClientId,
               week_number: weekNumber,
-              comment: weekNote,
+              comment: weekTitle,
               updated_at: new Date().toISOString()
             }, {
               onConflict: 'coach_client_id,week_number'
@@ -1234,37 +1259,8 @@ app.post('/add-roadmap', async (req, res) => {
       }
     }
 
-    // 3. Stocker les objectifs stratégiques (uniquement si coachClientId existe)
-    if (coachClientId && roadmapContent?.strategic_goals) {
-      const strategicGoalsNote = `OBJECTIFS STRATÉGIQUES\n\nObjectifs 4 mois:\n${roadmapContent.strategic_goals.goals_4_months || ''}\n\nObjectifs 12 mois:\n${roadmapContent.strategic_goals.goals_12_months || ''}`
-
-      // Récupérer la note existante si elle existe
-      const { data: existingNote } = await supabase
-        .from('coach_client_week_notes')
-        .select('comment')
-        .eq('coach_client_id', coachClientId)
-        .eq('week_number', 1)
-        .maybeSingle()
-
-      const combinedNote = existingNote?.comment 
-        ? `${strategicGoalsNote}\n\n---\n\n${existingNote.comment}`
-        : strategicGoalsNote
-
-      const { error: goalsNoteError } = await supabase
-        .from('coach_client_week_notes')
-        .upsert({
-          coach_client_id: coachClientId,
-          week_number: 1,
-          comment: combinedNote,
-          updated_at: new Date().toISOString()
-        }, {
-          onConflict: 'coach_client_id,week_number'
-        })
-
-      if (goalsNoteError) {
-        console.error('Error upserting strategic goals note:', goalsNoteError)
-      }
-    }
+    // 3. Les objectifs stratégiques ne sont plus stockés dans les notes de semaine
+    // Le comment contient uniquement le titre court de la semaine
 
     // 4. Stocker les métriques financières (uniquement si coachClientId existe)
     if (coachClientId && roadmapContent?.header?.financials) {
