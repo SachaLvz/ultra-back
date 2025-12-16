@@ -1079,14 +1079,13 @@ app.post('/add-roadmap', async (req, res) => {
                   description: taskDescription,
                   week_number: weekNumber,
                   status: 'pending',
-                  priority: 'medium',
-                  pillar: pillarType
+                  priority: 'medium'
                 })
 
               if (taskError) {
                 console.error(`Error creating task from pillar ${pillar.pillar_type} for week ${weekNumber}:`, taskError)
               } else {
-                console.log(`✅ Tâche créée depuis pilier: "${taskTitle}" (semaine ${weekNumber}, pilier: ${pillarType})`)
+                console.log(`✅ Tâche créée depuis pilier: "${taskTitle}" (semaine ${weekNumber})`)
               }
             }
           }
@@ -1207,14 +1206,13 @@ app.post('/add-roadmap', async (req, res) => {
                       description: taskDescription,
                       week_number: weekNumber,
                       status: 'pending',
-                      priority: 'medium',
-                      pillar: pillar
+                      priority: 'medium'
                     })
 
                   if (taskError) {
                     console.error(`Error creating task for week ${weekNumber}:`, taskError)
                   } else {
-                    console.log(`✅ Tâche créée: "${taskTitle}" (semaine ${weekNumber}, pilier: ${pillar})`)
+                    console.log(`✅ Tâche créée: "${taskTitle}" (semaine ${weekNumber})`)
                   }
                 }
               }
