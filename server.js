@@ -502,6 +502,33 @@ app.post('/add-roadmap', async (req, res) => {
       clientData.client_email = `${clientData.client_name.toLowerCase().replace(/\s+/g, '.')}@client.temp`
     }
 
+    // Chercher l'email du coach dans plusieurs endroits possibles
+    let coachEmail = coachInfo.coach_email || 
+                     body.coach_email || 
+                     body.data?.coach_email || 
+                     data.data?.coach_email ||
+                     roadmapContent?.header?.coach_email ||
+                     null
+
+    // Log pour déboguer l'extraction de l'email du coach
+    console.log('📧 Extraction email coach:', {
+      'coachInfo.coach_email': coachInfo.coach_email,
+      'body.coach_email': body.coach_email,
+      'body.data?.coach_email': body.data?.coach_email,
+      'data.data?.coach_email': data.data?.coach_email,
+      'roadmapContent?.header?.coach_email': roadmapContent?.header?.coach_email,
+      'coachEmail final': coachEmail
+    })
+
+    // Utiliser aussi le nom du coach depuis plusieurs sources
+    if (!coachInfo.coach_name) {
+      coachInfo.coach_name = body.coach_name || 
+                            body.data?.coach_name || 
+                            data.data?.coach_name ||
+                            roadmapContent?.header?.coach_name ||
+                            null
+    }
+
     if (!clientData.client_name) {
       return res.status(400).json({
         error: 'client_name or company_name is required'
@@ -517,38 +544,76 @@ app.post('/add-roadmap', async (req, res) => {
     // Trouver le coach (optionnel)
     let coachId = null
 
-    // Chercher d'abord par email si un coach_email est fourni dans les données
-    if (coachInfo.coach_email) {
-      const { data: existingCoach } = await supabase
+    // Chercher d'abord par email si un coach_email est fourni
+    if (coachEmail) {
+      console.log(`🔍 Recherche du coach par email: ${coachEmail}`)
+      
+      // D'abord chercher avec le filtre de rôle 'coach'
+      let { data: existingCoach, error: coachError } = await supabase
         .from('profiles')
-        .select('id')
-        .eq('email', coachInfo.coach_email)
+        .select('id, email, role')
+        .eq('email', coachEmail)
         .eq('role', 'coach')
-        .single()
+        .maybeSingle()
 
-      if (existingCoach) {
-        coachId = existingCoach.id
+      if (coachError) {
+        console.log(`⚠️  Erreur lors de la recherche du coach par email:`, coachError.message)
       }
+
+      if (existingCoach && existingCoach.role === 'coach') {
+        coachId = existingCoach.id
+        console.log(`✅ Coach trouvé par email: ${coachId}`)
+      } else {
+        // Si aucun coach trouvé, vérifier si l'utilisateur existe avec un autre rôle
+        const { data: userExists } = await supabase
+          .from('profiles')
+          .select('id, email, role')
+          .eq('email', coachEmail)
+          .maybeSingle()
+        
+        if (userExists) {
+          console.log(`⚠️  Utilisateur trouvé avec l'email ${coachEmail} mais le rôle est '${userExists.role}' au lieu de 'coach'`)
+        } else {
+          console.log(`⚠️  Aucun utilisateur trouvé avec l'email: ${coachEmail}`)
+        }
+      }
+    } else {
+      console.log('ℹ️  Aucun email de coach fourni dans les données')
     }
 
     // Si aucun coach n'a été trouvé par email, chercher par ID comme fallback
     if (!coachId) {
       const providedCoachId = body.coach_id || null
       if (providedCoachId) {
-        const { data: coachProfile } = await supabase
+        console.log(`🔍 Recherche du coach par ID: ${providedCoachId}`)
+        const { data: coachProfile, error: coachIdError } = await supabase
           .from('profiles')
-          .select('id')
+          .select('id, email, role')
           .eq('id', providedCoachId)
-          .eq('role', 'coach')
-          .single()
+          .maybeSingle()
         
+        if (coachIdError) {
+          console.log(`⚠️  Erreur lors de la recherche du coach par ID:`, coachIdError.message)
+        }
+
         if (coachProfile) {
-          coachId = providedCoachId
+          // Vérifier que le profil a bien le rôle 'coach'
+          if (coachProfile.role === 'coach') {
+            coachId = providedCoachId
+            console.log(`✅ Coach trouvé par ID: ${coachId}`)
+          } else {
+            console.log(`⚠️  Utilisateur trouvé avec l'ID ${providedCoachId} mais le rôle est '${coachProfile.role}' au lieu de 'coach'`)
+          }
+        } else {
+          console.log(`⚠️  Aucun utilisateur trouvé avec l'ID: ${providedCoachId}`)
         }
       }
     }
 
     // Si aucun coach n'est trouvé, on continue sans coach (coachId reste null)
+    if (!coachId && coachEmail) {
+      console.log(`⚠️  Email de coach fourni (${coachEmail}) mais aucun coach trouvé dans la base de données`)
+    }
 
     // Vérifier si le client existe déjà
     let clientProfileId = null
@@ -743,7 +808,11 @@ app.post('/add-roadmap', async (req, res) => {
         coachClientId = newRelation.id
       }
     } else {
-      console.log('⚠️  Aucun coach fourni, la relation coach-client ne sera pas créée')
+      if (coachEmail) {
+        console.log(`⚠️  Email de coach fourni (${coachEmail}) mais aucun coach trouvé dans la base de données. La relation coach-client ne sera pas créée.`)
+      } else {
+        console.log('⚠️  Aucun coach fourni, la relation coach-client ne sera pas créée')
+      }
     }
 
     // 1. Créer/Mettre à jour les piliers stratégiques (uniquement si coachClientId existe)
@@ -985,7 +1054,7 @@ app.post('/add-roadmap', async (req, res) => {
       coach_id: coachId,
       client_email: clientData.client_email,
       client_name: clientData.client_name,
-      coach_email: coachInfo.coach_email || null,
+      coach_email: coachEmail || null,
       coach_name: coachInfo.coach_name || null
     })
 
