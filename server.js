@@ -969,47 +969,63 @@ app.post('/add-roadmap', async (req, res) => {
 
     // 1. Créer/Mettre à jour les piliers stratégiques (uniquement si coachClientId existe)
     if (coachClientId && roadmapContent?.vision) {
+      // Fonction helper pour nettoyer et formater les actions en tableau JSONB
+      const formatActions = (actionsString) => {
+        if (!actionsString) return []
+        return actionsString
+          .split('\n')
+          .map(a => a.trim())
+          .filter(a => a.length > 0)
+          .map(a => a.startsWith('-') ? a.substring(1).trim() : a)
+          .filter(a => a.length > 0)
+      }
+
       const pillars = [
         {
           pillar_type: 'operations',
           title: 'Structure & Opérations',
           problem: roadmapContent.vision.structure?.current_situation || '',
-          actions: roadmapContent.vision.structure?.actions?.split('\n').filter(a => a.trim()) || [],
+          actions: formatActions(roadmapContent.vision.structure?.actions),
           expert_tip: roadmapContent.vision.structure?.expert_suggestion || 'Aucune suggestion'
         },
         {
           pillar_type: 'acquisition',
           title: 'Acquisition & Vente',
           problem: roadmapContent.vision.acquisition?.current_situation || '',
-          actions: roadmapContent.vision.acquisition?.actions?.split('\n').filter(a => a.trim()) || [],
+          actions: formatActions(roadmapContent.vision.acquisition?.actions),
           expert_tip: roadmapContent.vision.acquisition?.expert_suggestion || 'Aucune suggestion'
         },
         {
           pillar_type: 'vision',
           title: 'Vision & Pilotage',
           problem: roadmapContent.vision.vision_pilotage?.current_situation || '',
-          actions: roadmapContent.vision.vision_pilotage?.actions?.split('\n').filter(a => a.trim()) || [],
+          actions: formatActions(roadmapContent.vision.vision_pilotage?.actions),
           expert_tip: roadmapContent.vision.vision_pilotage?.expert_suggestion || 'Aucune suggestion'
         }
       ]
 
       for (const pillar of pillars) {
+        // S'assurer que les valeurs ne sont pas null pour les champs requis
+        const pillarData = {
+          coach_client_id: coachClientId,
+          pillar_type: pillar.pillar_type,
+          title: pillar.title || 'Pilier stratégique',
+          problem: pillar.problem || '',
+          actions: Array.isArray(pillar.actions) ? pillar.actions : [],
+          expert_tip: pillar.expert_tip || 'Aucune suggestion',
+          updated_at: new Date().toISOString()
+        }
+
         const { error: pillarError } = await supabase
           .from('roadmap_strategic_pillars')
-          .upsert({
-            coach_client_id: coachClientId,
-            pillar_type: pillar.pillar_type,
-            title: pillar.title,
-            problem: pillar.problem,
-            actions: pillar.actions,
-            expert_tip: pillar.expert_tip,
-            updated_at: new Date().toISOString()
-          }, {
+          .upsert(pillarData, {
             onConflict: 'coach_client_id,pillar_type'
           })
 
         if (pillarError) {
           console.error(`Error upserting pillar ${pillar.pillar_type}:`, pillarError)
+        } else {
+          console.log(`✅ Pilier stratégique créé/mis à jour: ${pillar.pillar_type} (${pillar.actions.length} actions)`)
         }
 
         // Créer des tâches à partir des actions du pilier (uniquement si coachId existe)
@@ -1019,13 +1035,13 @@ app.post('/add-roadmap', async (req, res) => {
           
           for (let i = 0; i < pillar.actions.length; i++) {
             const action = pillar.actions[i]
-            if (!action || !action.trim() || !action.trim().startsWith('-')) continue
+            if (!action || typeof action !== 'string') continue
+            
+            let actionText = action.trim()
+            if (!actionText) continue
             
             // Calculer la semaine (1-16) en répartissant équitablement
             const weekNumber = Math.min(16, Math.max(1, Math.floor(i / actionsPerWeek) + 1))
-            
-            let actionText = action.replace(/^-\s*/, '').trim()
-            if (!actionText) continue
             
             // Générer un titre avec ChatGPT
             let taskTitle = await generateTaskTitleWithChatGPT(actionText)
