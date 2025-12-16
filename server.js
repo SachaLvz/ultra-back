@@ -1134,9 +1134,6 @@ app.post('/add-roadmap', async (req, res) => {
           const weekNumber = baseWeek + weekOffset
           const weekAction = weekActions[weekOffset] || ''
 
-          // Générer un titre simple pour la semaine
-          const weekTitle = await generateWeekTitleWithChatGPT(month.objective, weekNumber)
-
           // Construire la note complète pour la semaine
           const weekNote = `OBJECTIF MOIS ${monthIndex + 1}: ${month.objective || ''}\n\nKPIs:\n${month.kpi || ''}\n\nActions semaine ${weekNumber}:\n${weekAction}`
 
@@ -1145,7 +1142,6 @@ app.post('/add-roadmap', async (req, res) => {
             .upsert({
               coach_client_id: coachClientId,
               week_number: weekNumber,
-              title: weekTitle,
               comment: weekNote,
               updated_at: new Date().toISOString()
             }, {
@@ -1245,7 +1241,7 @@ app.post('/add-roadmap', async (req, res) => {
       // Récupérer la note existante si elle existe
       const { data: existingNote } = await supabase
         .from('coach_client_week_notes')
-        .select('comment, title')
+        .select('comment')
         .eq('coach_client_id', coachClientId)
         .eq('week_number', 1)
         .maybeSingle()
@@ -1254,21 +1250,11 @@ app.post('/add-roadmap', async (req, res) => {
         ? `${strategicGoalsNote}\n\n---\n\n${existingNote.comment}`
         : strategicGoalsNote
 
-      // Générer un titre simple pour la semaine 1 si pas déjà présent
-      let week1Title = existingNote?.title
-      if (!week1Title && roadmapContent?.monthly_plan?.month_1?.objective) {
-        week1Title = await generateWeekTitleWithChatGPT(roadmapContent.monthly_plan.month_1.objective, 1)
-      }
-      if (!week1Title) {
-        week1Title = 'Semaine 1'
-      }
-
       const { error: goalsNoteError } = await supabase
         .from('coach_client_week_notes')
         .upsert({
           coach_client_id: coachClientId,
           week_number: 1,
-          title: week1Title,
           comment: combinedNote,
           updated_at: new Date().toISOString()
         }, {
