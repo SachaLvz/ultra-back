@@ -30,6 +30,9 @@ const APP_URL = process.env.APP_URL || 'https://ultra-copy.vercel.app'
 const FROM_EMAIL = process.env.FROM_EMAIL || 'onboarding@app-ultra.com'
 const RESEND_TEST_EMAIL = process.env.RESEND_TEST_EMAIL
 
+// Configuration OpenAI
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY
+
 // Créer le client Supabase seulement si les variables sont définies
 let supabase = null
 if (SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY) {
@@ -148,6 +151,88 @@ const parsePercentage = (value) => {
   if (!value) return null
   const cleaned = value.replace(/[%\s]/g, '').trim()
   return cleaned ? parseFloat(cleaned) : null
+}
+
+// Fonction pour générer un titre court et clair avec ChatGPT
+const generateTaskTitleWithChatGPT = async (actionText) => {
+  if (!OPENAI_API_KEY) {
+    console.warn('⚠️  OPENAI_API_KEY non configurée, utilisation du titre par défaut')
+    return null
+  }
+
+  try {
+    const prompt = `Tu es un assistant expert en gestion de projet. Ton rôle est de créer un titre court, clair et actionnable à partir d'une action détaillée.
+
+ACTION À RÉSUMER:
+${actionText}
+
+RÈGLES STRICTES:
+- Le titre DOIT être UNE SEULE PHRASE COURTE (maximum 10-12 mots)
+- Le titre DOIT être simple, clair et direct
+- Le titre DOIT être actionnable (commence par un verbe d'action)
+- JAMAIS de listes à puces dans le titre
+- JAMAIS de phrases multiples séparées par des virgules ou "et"
+- JAMAIS de titres trop longs ou complexes
+- Le titre doit être en français
+
+Exemples de BONS titres:
+- "Lancer les campagnes Facebook Ads"
+- "Recruter des étudiants pour la salle"
+- "Finaliser le tunnel de vente"
+- "Mettre en place l'offre lunch"
+- "Organiser une réunion d'équipe"
+
+Exemples de MAUVAIS titres:
+- "Lancer les campagnes Facebook Ads et Google Ads avec un budget test ciblé localement" (trop long)
+- "Recruter des étudiants - salle, bar, runner, plonge" (liste)
+- "Finaliser avec Lucas la mise en place du tunnel de vente et lancer les premières campagnes" (plusieurs actions)
+
+Réponds UNIQUEMENT avec le titre, sans guillemets, sans explication, sans texte supplémentaire.`;
+
+    const response = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${OPENAI_API_KEY}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: 'gpt-4o-mini',
+        messages: [
+          {
+            role: 'system',
+            content: 'Tu es un assistant expert qui crée des titres courts et clairs pour des tâches. Tu réponds UNIQUEMENT avec le titre, sans guillemets, sans explication.',
+          },
+          {
+            role: 'user',
+            content: prompt,
+          },
+        ],
+        temperature: 0.3,
+        max_tokens: 50,
+      }),
+    })
+
+    if (!response.ok) {
+      const error = await response.text()
+      console.error('⚠️  Erreur OpenAI API pour génération de titre:', error)
+      return null
+    }
+
+    const data = await response.json()
+    let title = data.choices[0]?.message?.content?.trim() || null
+    
+    // Nettoyer le titre (enlever les guillemets si présents)
+    if (title) {
+      title = title.replace(/^["']|["']$/g, '').trim()
+      // Limiter à 100 caractères pour sécurité
+      title = title.substring(0, 100).trim()
+    }
+
+    return title
+  } catch (error) {
+    console.error('⚠️  Erreur lors de la génération du titre avec ChatGPT:', error)
+    return null
+  }
 }
 
 // Fonction pour appeler l'edge function Supabase pour analyser la roadmap
@@ -936,25 +1021,30 @@ app.post('/add-roadmap', async (req, res) => {
             let actionText = action.replace(/^-\s*/, '').trim()
             if (!actionText) continue
             
-            // Créer un titre simple et court (première phrase ou 10-12 mots max)
-            let taskTitle = actionText
-            // Si l'action contient plusieurs phrases, prendre seulement la première
-            const firstSentence = actionText.split(/[.!?]\s+/)[0].trim()
-            if (firstSentence.length > 0 && firstSentence.length < actionText.length * 0.8) {
-              taskTitle = firstSentence
+            // Générer un titre avec ChatGPT
+            let taskTitle = await generateTaskTitleWithChatGPT(actionText)
+            
+            // Fallback si ChatGPT échoue : utiliser la première phrase ou limiter
+            if (!taskTitle) {
+              taskTitle = actionText
+              // Si l'action contient plusieurs phrases, prendre seulement la première
+              const firstSentence = actionText.split(/[.!?]\s+/)[0].trim()
+              if (firstSentence.length > 0 && firstSentence.length < actionText.length * 0.8) {
+                taskTitle = firstSentence
+              }
+              
+              // Limiter à 12 mots maximum
+              const words = taskTitle.split(/\s+/)
+              if (words.length > 12) {
+                taskTitle = words.slice(0, 12).join(' ')
+              }
+              
+              // Limiter à 100 caractères pour le titre
+              taskTitle = taskTitle.substring(0, 100).trim()
             }
             
-            // Limiter à 12 mots maximum
-            const words = taskTitle.split(/\s+/)
-            if (words.length > 12) {
-              taskTitle = words.slice(0, 12).join(' ')
-            }
-            
-            // Limiter à 100 caractères pour le titre
-            taskTitle = taskTitle.substring(0, 100).trim()
-            
-            // La description contient l'action complète si elle est plus longue
-            const taskDescription = actionText.length > taskTitle.length ? actionText : null
+            // La description contient l'action complète
+            const taskDescription = actionText
             
             // Mapper le pillar_type au format attendu
             let pillarType = 'structure'
@@ -1047,25 +1137,30 @@ app.post('/add-roadmap', async (req, res) => {
             for (const action of actions) {
               let actionText = action.replace(/^-\s*/, '').trim()
               if (actionText) {
-                // Créer un titre simple et court (première phrase ou 10-12 mots max)
-                let taskTitle = actionText
-                // Si l'action contient plusieurs phrases, prendre seulement la première
-                const firstSentence = actionText.split(/[.!?]\s+/)[0].trim()
-                if (firstSentence.length > 0 && firstSentence.length < actionText.length * 0.8) {
-                  taskTitle = firstSentence
+                // Générer un titre avec ChatGPT
+                let taskTitle = await generateTaskTitleWithChatGPT(actionText)
+                
+                // Fallback si ChatGPT échoue : utiliser la première phrase ou limiter
+                if (!taskTitle) {
+                  taskTitle = actionText
+                  // Si l'action contient plusieurs phrases, prendre seulement la première
+                  const firstSentence = actionText.split(/[.!?]\s+/)[0].trim()
+                  if (firstSentence.length > 0 && firstSentence.length < actionText.length * 0.8) {
+                    taskTitle = firstSentence
+                  }
+                  
+                  // Limiter à 12 mots maximum
+                  const words = taskTitle.split(/\s+/)
+                  if (words.length > 12) {
+                    taskTitle = words.slice(0, 12).join(' ')
+                  }
+                  
+                  // Limiter à 100 caractères pour le titre
+                  taskTitle = taskTitle.substring(0, 100).trim()
                 }
                 
-                // Limiter à 12 mots maximum
-                const words = taskTitle.split(/\s+/)
-                if (words.length > 12) {
-                  taskTitle = words.slice(0, 12).join(' ')
-                }
-                
-                // Limiter à 100 caractères pour le titre
-                taskTitle = taskTitle.substring(0, 100).trim()
-                
-                // La description contient l'action complète si elle est plus longue
-                const taskDescription = actionText.length > taskTitle.length ? actionText : null
+                // La description contient l'action complète
+                const taskDescription = actionText
                 
                 // Déterminer le pilier selon le contexte
                 let pillar = 'structure' // par défaut
