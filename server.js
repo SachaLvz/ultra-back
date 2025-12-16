@@ -153,6 +153,73 @@ const parsePercentage = (value) => {
   return cleaned ? parseFloat(cleaned) : null
 }
 
+// Fonction pour générer un titre simple pour une semaine de roadmap
+const generateWeekTitleWithChatGPT = async (monthObjective, weekNumber) => {
+  if (!OPENAI_API_KEY) {
+    return `Semaine ${weekNumber}`
+  }
+
+  try {
+    const prompt = `Crée un titre court et simple (maximum 5-6 mots) pour la semaine ${weekNumber} d'une roadmap de coaching basé sur cet objectif mensuel:
+
+OBJECTIF: ${monthObjective || 'Objectifs de la semaine'}
+
+Le titre doit être:
+- Court (5-6 mots maximum)
+- Simple et clair
+- En français
+- Actionnable ou descriptif
+
+Exemples de bons titres:
+- "Structurer l'organisation interne"
+- "Lancer les campagnes marketing"
+- "Optimiser les processus opérationnels"
+- "Développer l'acquisition clients"
+
+Réponds UNIQUEMENT avec le titre, sans guillemets, sans explication.`;
+
+    const response = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${OPENAI_API_KEY}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: 'gpt-4o-mini',
+        messages: [
+          {
+            role: 'system',
+            content: 'Tu es un assistant expert qui crée des titres courts et simples pour des semaines de roadmap. Tu réponds UNIQUEMENT avec le titre, sans guillemets, sans explication.',
+          },
+          {
+            role: 'user',
+            content: prompt,
+          },
+        ],
+        temperature: 0.3,
+        max_tokens: 30,
+      }),
+    })
+
+    if (!response.ok) {
+      return `Semaine ${weekNumber}`
+    }
+
+    const data = await response.json()
+    let title = data.choices[0]?.message?.content?.trim() || null
+    
+    if (title) {
+      title = title.replace(/^["']|["']$/g, '').trim()
+      title = title.substring(0, 80).trim()
+    }
+
+    return title || `Semaine ${weekNumber}`
+  } catch (error) {
+    console.error('⚠️  Erreur lors de la génération du titre de semaine:', error)
+    return `Semaine ${weekNumber}`
+  }
+}
+
 // Fonction pour générer un titre court et clair avec ChatGPT
 const generateTaskTitleWithChatGPT = async (actionText) => {
   if (!OPENAI_API_KEY) {
@@ -1052,6 +1119,9 @@ app.post('/add-roadmap', async (req, res) => {
           const weekNumber = baseWeek + weekOffset
           const weekAction = weekActions[weekOffset] || ''
 
+          // Générer un titre simple pour la semaine
+          const weekTitle = await generateWeekTitleWithChatGPT(month.objective, weekNumber)
+
           // Construire la note complète pour la semaine
           const weekNote = `OBJECTIF MOIS ${monthIndex + 1}: ${month.objective || ''}\n\nKPIs:\n${month.kpi || ''}\n\nActions semaine ${weekNumber}:\n${weekAction}`
 
@@ -1060,6 +1130,7 @@ app.post('/add-roadmap', async (req, res) => {
             .upsert({
               coach_client_id: coachClientId,
               week_number: weekNumber,
+              title: weekTitle,
               comment: weekNote,
               updated_at: new Date().toISOString()
             }, {
@@ -1160,20 +1231,30 @@ app.post('/add-roadmap', async (req, res) => {
       // Récupérer la note existante si elle existe
       const { data: existingNote } = await supabase
         .from('coach_client_week_notes')
-        .select('comment')
+        .select('comment, title')
         .eq('coach_client_id', coachClientId)
         .eq('week_number', 1)
-        .single()
+        .maybeSingle()
 
       const combinedNote = existingNote?.comment 
         ? `${strategicGoalsNote}\n\n---\n\n${existingNote.comment}`
         : strategicGoalsNote
+
+      // Générer un titre simple pour la semaine 1 si pas déjà présent
+      let week1Title = existingNote?.title
+      if (!week1Title && roadmapContent?.monthly_plan?.month_1?.objective) {
+        week1Title = await generateWeekTitleWithChatGPT(roadmapContent.monthly_plan.month_1.objective, 1)
+      }
+      if (!week1Title) {
+        week1Title = 'Semaine 1'
+      }
 
       const { error: goalsNoteError } = await supabase
         .from('coach_client_week_notes')
         .upsert({
           coach_client_id: coachClientId,
           week_number: 1,
+          title: week1Title,
           comment: combinedNote,
           updated_at: new Date().toISOString()
         }, {
