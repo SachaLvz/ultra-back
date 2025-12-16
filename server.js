@@ -150,6 +150,54 @@ const parsePercentage = (value) => {
   return cleaned ? parseFloat(cleaned) : null
 }
 
+// Fonction pour appeler l'edge function Supabase pour analyser la roadmap
+const analyzeRoadmapWithEdgeFunction = async (roadmapContent) => {
+  if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
+    console.warn('⚠️  SUPABASE_URL ou SUPABASE_SERVICE_ROLE_KEY non configurés, analyse de roadmap ignorée')
+    return null
+  }
+
+  try {
+    // Construire l'URL de l'edge function
+    // Format: https://[project-ref].supabase.co/functions/v1/[function-name]
+    const projectRef = SUPABASE_URL.replace('https://', '').replace('http://', '').split('.')[0]
+    const edgeFunctionUrl = `${SUPABASE_URL}/functions/v1/analyze-roadmap`
+
+    console.log('🤖 Appel de l\'edge function pour analyser la roadmap...')
+    
+    // Convertir le contenu de la roadmap en string JSON pour l'analyse
+    const roadmapContentString = JSON.stringify(roadmapContent)
+    
+    const response = await fetch(edgeFunctionUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+        'apikey': SUPABASE_SERVICE_ROLE_KEY
+      },
+      body: JSON.stringify({
+        roadmap_content: roadmapContentString,
+        content_type: 'json'
+      })
+    })
+
+    if (!response.ok) {
+      const errorText = await response.text()
+      console.error('⚠️  Erreur lors de l\'appel à l\'edge function:', response.status, errorText)
+      return null
+    }
+
+    const result = await response.json()
+    console.log('✅ Analyse de la roadmap terminée:', result.success ? 'succès' : 'échec')
+    
+    return result.extraction || null
+  } catch (error) {
+    console.error('⚠️  Erreur lors de l\'appel à l\'edge function:', error)
+    // Ne pas faire échouer l'import si l'analyse échoue
+    return null
+  }
+}
+
 // Fonction pour envoyer un email au client avec ses identifiants
 const sendWelcomeEmail = async (clientData, clientPassword, isNewClient, roadmapContent) => {
   if (!RESEND_API_KEY || !clientData.client_email || !clientPassword) {
@@ -527,6 +575,19 @@ app.post('/add-roadmap', async (req, res) => {
                             data.data?.coach_name ||
                             roadmapContent?.header?.coach_name ||
                             null
+    }
+
+    // Appeler l'edge function pour analyser la roadmap
+    let roadmapAnalysis = null
+    if (roadmapContent) {
+      roadmapAnalysis = await analyzeRoadmapWithEdgeFunction(roadmapContent)
+      if (roadmapAnalysis) {
+        console.log('📊 Analyse de la roadmap reçue:', {
+          tasks: roadmapAnalysis.tasks?.length || 0,
+          notes: roadmapAnalysis.notes?.length || 0,
+          hasSummary: !!roadmapAnalysis.summary
+        })
+      }
     }
 
     if (!clientData.client_name) {
