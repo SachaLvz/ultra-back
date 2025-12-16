@@ -9,9 +9,13 @@ const app = express()
 const SUPABASE_URL = process.env.SUPABASE_URL
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY
 
+// Sur Vercel, on ne peut pas utiliser process.exit(), donc on vérifie lors de la première requête
 if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
   console.error('⚠️  SUPABASE_URL et SUPABASE_SERVICE_ROLE_KEY doivent être configurés dans .env')
-  process.exit(1)
+  // Ne pas faire process.exit() sur Vercel, l'erreur sera retournée lors de la première requête
+  if (!process.env.VERCEL && !process.env.VERCEL_ENV) {
+    process.exit(1)
+  }
 }
 
 // Configuration Email (Resend)
@@ -20,24 +24,28 @@ const APP_URL = process.env.APP_URL || 'https://ultra-copy.vercel.app'
 const FROM_EMAIL = process.env.FROM_EMAIL || 'onboarding@app-ultra.com'
 const RESEND_TEST_EMAIL = process.env.RESEND_TEST_EMAIL
 
-const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
-  auth: {
-    autoRefreshToken: false,
-    persistSession: false
-  }
-})
+// Créer le client Supabase seulement si les variables sont définies
+let supabase = null
+if (SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY) {
+  supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
+    auth: {
+      autoRefreshToken: false,
+      persistSession: false
+    }
+  })
 
-// Vérifier la configuration Supabase au démarrage
-if (SUPABASE_SERVICE_ROLE_KEY) {
-  // Vérifier que ce n'est pas l'anon key (qui commence généralement par "eyJ")
-  if (SUPABASE_SERVICE_ROLE_KEY.startsWith('eyJ') && SUPABASE_SERVICE_ROLE_KEY.length < 200) {
-    console.warn('⚠️  ATTENTION: La clé fournie semble être une clé anon, pas une service_role key')
-    console.warn('⚠️  La service_role key est beaucoup plus longue et commence généralement par "eyJ" mais fait plus de 200 caractères')
-  }
-  
-  // Vérifier la longueur minimale (les service_role keys sont généralement très longues)
-  if (SUPABASE_SERVICE_ROLE_KEY.length < 100) {
-    console.warn('⚠️  ATTENTION: La clé semble trop courte pour être une service_role key valide')
+  // Vérifier la configuration Supabase au démarrage
+  if (SUPABASE_SERVICE_ROLE_KEY) {
+    // Vérifier que ce n'est pas l'anon key (qui commence généralement par "eyJ")
+    if (SUPABASE_SERVICE_ROLE_KEY.startsWith('eyJ') && SUPABASE_SERVICE_ROLE_KEY.length < 200) {
+      console.warn('⚠️  ATTENTION: La clé fournie semble être une clé anon, pas une service_role key')
+      console.warn('⚠️  La service_role key est beaucoup plus longue et commence généralement par "eyJ" mais fait plus de 200 caractères')
+    }
+    
+    // Vérifier la longueur minimale (les service_role keys sont généralement très longues)
+    if (SUPABASE_SERVICE_ROLE_KEY.length < 100) {
+      console.warn('⚠️  ATTENTION: La clé semble trop courte pour être une service_role key valide')
+    }
   }
 }
 
@@ -377,6 +385,14 @@ Cet email a été envoyé automatiquement. Merci de ne pas y répondre.
 // Endpoint pour ajouter une roadmap
 app.post('/add-roadmap', async (req, res) => {
   try {
+    // Vérifier la configuration Supabase au début de la requête (pour Vercel)
+    if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY || !supabase) {
+      return res.status(500).json({
+        error: 'Server configuration error',
+        details: 'SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY must be configured in environment variables'
+      })
+    }
+
     console.log('📨 Requête reçue:', req.method, req.url)
     console.log('📋 Body reçu:', JSON.stringify(req.body).substring(0, 200))
 
@@ -952,7 +968,14 @@ app.post('/add-roadmap', async (req, res) => {
   }
 })
 
-const PORT = process.env.PORT || 3000
-app.listen(PORT, () => {
-  console.log(`🚀 Server running on port ${PORT}`)
-})
+// Export pour Vercel Serverless Functions
+export default app
+
+// Démarrer le serveur seulement si on n'est pas sur Vercel
+// Vercel utilise les variables VERCEL ou VERCEL_ENV
+if (!process.env.VERCEL && !process.env.VERCEL_ENV) {
+  const PORT = process.env.PORT || 3000
+  app.listen(PORT, () => {
+    console.log(`🚀 Server running on port ${PORT}`)
+  })
+}
