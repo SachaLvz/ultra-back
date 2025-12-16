@@ -268,7 +268,7 @@ const sendWelcomeEmail = async (clientData, clientPassword, isNewClient, roadmap
               <table width="100%" cellpadding="0" cellspacing="0" role="presentation">
                 <tr>
                   <td align="center">
-                    <a href="${APP_URL}/login"
+                    <a href="https://www.app-ultra.com/signin"
                        style="display:inline-block;
                               background:linear-gradient(135deg,#ff9502,#ff7a00);
                               color:#ffffff;text-decoration:none;
