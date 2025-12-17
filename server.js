@@ -1262,8 +1262,8 @@ app.post('/add-roadmap', async (req, res) => {
     // 3. Les objectifs stratégiques ne sont plus stockés dans les notes de semaine
     // Le comment contient uniquement le titre court de la semaine
 
-    // 4. Stocker les métriques financières (uniquement si coachClientId existe)
-    if (coachClientId && roadmapContent?.header?.financials) {
+    // 4. Stocker les métriques financières (uniquement si coachClientId et coachId existent)
+    if (coachClientId && coachId && roadmapContent?.header?.financials) {
       const financials = roadmapContent.header.financials
       
       const revenue = parseCurrency(financials.ca)
@@ -1275,6 +1275,7 @@ app.post('/add-roadmap', async (req, res) => {
         // Essayer différentes structures de table
         const metricsData = {
           coach_client_id: coachClientId,
+          coach_id: coachId, // Champ requis
           client_id: clientProfileId,
           week_number: 1,
           revenue: revenue,
