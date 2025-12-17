@@ -1278,6 +1278,7 @@ app.post('/add-roadmap', async (req, res) => {
           coach_id: coachId, // Champ requis
           client_id: clientProfileId,
           week_number: 1,
+          metric_type: 'financial', // Type de métrique (financial, operational, etc.)
           revenue: revenue,
           cash_in_bank: cashFlow,
           clients_count: clientsCount,
