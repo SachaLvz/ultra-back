@@ -1281,6 +1281,31 @@ app.post('/add-roadmap', async (req, res) => {
           }
         }
       }
+
+      // Sauvegarder les objectifs mensuels (mois 1 à 12)
+      for (let monthNum = 1; monthNum <= 12; monthNum++) {
+        const monthKey = `month_${monthNum}`
+        const monthData = roadmapContent.monthly_plan?.[monthKey]
+        
+        if (monthData?.objective) {
+          const { error: objectiveError } = await supabase
+            .from('roadmap_monthly_objectives')
+            .upsert({
+              coach_client_id: coachClientId,
+              month_number: monthNum,
+              objective: monthData.objective,
+              updated_at: new Date().toISOString()
+            }, {
+              onConflict: 'coach_client_id,month_number'
+            })
+
+          if (objectiveError) {
+            console.error(`Error upserting monthly objective for month ${monthNum}:`, objectiveError)
+          } else {
+            console.log(`✅ Objectif mensuel sauvegardé pour le mois ${monthNum}`)
+          }
+        }
+      }
     }
 
     // 3. Les objectifs stratégiques ne sont plus stockés dans les notes de semaine
