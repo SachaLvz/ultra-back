@@ -716,34 +716,23 @@ app.post('/add-roadmap', async (req, res) => {
     if (coachEmail) {
       console.log(`🔍 Recherche du coach par email: ${coachEmail}`)
       
-      // D'abord chercher avec le filtre de rôle 'coach'
-      let { data: existingCoach, error: coachError } = await supabase
+      // Chercher l'utilisateur par email (peut être coach ou admin)
+      const { data: existingCoach, error: coachError } = await supabase
         .from('profiles')
         .select('id, email, role')
         .eq('email', coachEmail)
-        .eq('role', 'coach')
+        .in('role', ['coach', 'admin'])
         .maybeSingle()
 
       if (coachError) {
         console.log(`⚠️  Erreur lors de la recherche du coach par email:`, coachError.message)
       }
 
-      if (existingCoach && existingCoach.role === 'coach') {
+      if (existingCoach && (existingCoach.role === 'coach' || existingCoach.role === 'admin')) {
         coachId = existingCoach.id
-        console.log(`✅ Coach trouvé par email: ${coachId}`)
+        console.log(`✅ Coach trouvé par email: ${coachId} (rôle: ${existingCoach.role})`)
       } else {
-        // Si aucun coach trouvé, vérifier si l'utilisateur existe avec un autre rôle
-        const { data: userExists } = await supabase
-          .from('profiles')
-          .select('id, email, role')
-          .eq('email', coachEmail)
-          .maybeSingle()
-        
-        if (userExists) {
-          console.log(`⚠️  Utilisateur trouvé avec l'email ${coachEmail} mais le rôle est '${userExists.role}' au lieu de 'coach'`)
-        } else {
-          console.log(`⚠️  Aucun utilisateur trouvé avec l'email: ${coachEmail}`)
-        }
+        console.log(`⚠️  Aucun utilisateur trouvé avec l'email ${coachEmail} ayant le rôle 'coach' ou 'admin'`)
       }
     } else {
       console.log('ℹ️  Aucun email de coach fourni dans les données')
@@ -765,12 +754,12 @@ app.post('/add-roadmap', async (req, res) => {
         }
 
         if (coachProfile) {
-          // Vérifier que le profil a bien le rôle 'coach'
-          if (coachProfile.role === 'coach') {
+          // Accepter les rôles 'coach' ou 'admin'
+          if (coachProfile.role === 'coach' || coachProfile.role === 'admin') {
             coachId = providedCoachId
-            console.log(`✅ Coach trouvé par ID: ${coachId}`)
+            console.log(`✅ Coach trouvé par ID: ${coachId} (rôle: ${coachProfile.role})`)
           } else {
-            console.log(`⚠️  Utilisateur trouvé avec l'ID ${providedCoachId} mais le rôle est '${coachProfile.role}' au lieu de 'coach'`)
+            console.log(`⚠️  Utilisateur trouvé avec l'ID ${providedCoachId} mais le rôle est '${coachProfile.role}' (attendu: 'coach' ou 'admin')`)
           }
         } else {
           console.log(`⚠️  Aucun utilisateur trouvé avec l'ID: ${providedCoachId}`)
