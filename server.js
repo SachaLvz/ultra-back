@@ -153,36 +153,36 @@ const parsePercentage = (value) => {
   return cleaned ? parseFloat(cleaned) : null
 }
 
-// Fonction pour générer un titre très court pour une semaine basé sur les actions
+// Fonction pour identifier l'action la plus importante et générer un titre très court
 const generateWeekTitleWithChatGPT = async (weekActions, weekNumber) => {
   if (!OPENAI_API_KEY) {
     return `Semaine ${weekNumber}`
   }
 
   try {
-    // Extraire les premières actions pour donner du contexte
-    const firstActions = weekActions
+    // Extraire toutes les actions de la semaine
+    const allActions = weekActions
       .split('\n')
       .filter(a => a.trim() && a.trim().startsWith('-'))
-      .slice(0, 3)
       .map(a => a.replace(/^-\s*/, '').trim())
-      .join(', ')
+      .filter(a => a.length > 0)
 
-    if (!firstActions || firstActions.length === 0) {
+    if (!allActions || allActions.length === 0) {
       return `Semaine ${weekNumber}`
     }
 
-    const prompt = `Crée un titre TRÈS COURT (2-3 mots maximum) qui décrit ce que le client doit faire pendant la semaine ${weekNumber} d'une roadmap de coaching.
+    const actionsList = allActions.map((action, index) => `${index + 1}. ${action}`).join('\n')
+
+    const prompt = `Parmi les actions suivantes de la semaine ${weekNumber}, identifie l'action LA PLUS IMPORTANTE et crée un titre TRÈS COURT (2-3 mots maximum) qui la résume.
 
 ACTIONS DE LA SEMAINE:
-${firstActions}
+${actionsList}
 
-Le titre doit être:
-- TRÈS COURT (2-3 mots maximum, vraiment petit)
-- Simple et direct
-- En français
-- Décrit ce que le client doit faire cette semaine
-- Actionnable
+INSTRUCTIONS:
+1. Identifie l'action la plus importante/prioritaire parmi toutes les actions
+2. Crée un titre TRÈS COURT (2-3 mots maximum) basé uniquement sur cette action la plus importante
+3. Le titre doit être simple, direct et actionnable
+4. En français
 
 Exemples de bons titres (2-3 mots):
 - "Structurer l'organisation"
@@ -192,7 +192,7 @@ Exemples de bons titres (2-3 mots):
 - "Optimiser les processus"
 - "Développer l'acquisition"
 
-Réponds UNIQUEMENT avec le titre (2-3 mots max), sans guillemets, sans explication.`;
+Réponds UNIQUEMENT avec le titre (2-3 mots max), sans guillemets, sans explication, sans numéro.`;
 
     const response = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
@@ -205,7 +205,7 @@ Réponds UNIQUEMENT avec le titre (2-3 mots max), sans guillemets, sans explicat
         messages: [
           {
             role: 'system',
-            content: 'Tu es un assistant expert qui crée des titres courts et simples pour des semaines de roadmap. Tu réponds UNIQUEMENT avec le titre, sans guillemets, sans explication.',
+            content: 'Tu es un assistant expert qui identifie l\'action la plus importante d\'une semaine et crée un titre court (2-3 mots) basé uniquement sur cette action. Tu réponds UNIQUEMENT avec le titre, sans guillemets, sans explication.',
           },
           {
             role: 'user',
@@ -940,6 +940,9 @@ app.post('/add-roadmap', async (req, res) => {
     // Créer la relation coach-client uniquement si un coach est fourni
     let coachClientId = null
     
+    // Extraire company_presentation depuis le JSON
+    const companyPresentation = roadmapContent?.header?.company_presentation || null
+    
     if (coachId) {
       const { data: existingRelations } = await supabase
         .from('coach_clients')
@@ -951,18 +954,39 @@ app.post('/add-roadmap', async (req, res) => {
 
       if (existingRelations && existingRelations.length > 0) {
         coachClientId = existingRelations[0].id
+        
+        // Mettre à jour company_presentation si la relation existe déjà
+        if (companyPresentation) {
+          const { error: updateError } = await supabase
+            .from('coach_clients')
+            .update({ company_presentation: companyPresentation })
+            .eq('id', coachClientId)
+          
+          if (updateError) {
+            console.error('⚠️ Erreur lors de la mise à jour de company_presentation:', updateError)
+          } else {
+            console.log('✅ company_presentation mis à jour pour la relation coach-client existante')
+          }
+        }
       } else {
         // Créer la relation coach-client
+        const relationData = {
+          coach_id: coachId,
+          client_id: clientProfileId,
+          status: 'active',
+          program_start_date: new Date().toISOString().split('T')[0],
+          total_weeks: 16,
+          current_week: 1
+        }
+        
+        // Ajouter company_presentation si présent
+        if (companyPresentation) {
+          relationData.company_presentation = companyPresentation
+        }
+        
         const { data: newRelation, error: relationError } = await supabase
           .from('coach_clients')
-          .insert({
-            coach_id: coachId,
-            client_id: clientProfileId,
-            status: 'active',
-            program_start_date: new Date().toISOString().split('T')[0],
-            total_weeks: 16,
-            current_week: 1
-          })
+          .insert(relationData)
           .select('id')
           .single()
 
