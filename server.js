@@ -1042,9 +1042,6 @@ app.post('/add-roadmap', async (req, res) => {
       }
     }
 
-    // Envoyer un email au client avec ses identifiants
-    await sendWelcomeEmail(clientData, clientPassword, isNewClient, roadmapContent)
-
     return res.status(200).json({
       success: true,
       message: 'Roadmap data imported successfully',
@@ -1054,12 +1051,386 @@ app.post('/add-roadmap', async (req, res) => {
       coach_id: coachId,
       client_email: clientData.client_email,
       client_name: clientData.client_name,
+      client_password: clientPassword,
       coach_email: coachEmail || null,
       coach_name: coachInfo.coach_name || null
     })
 
   } catch (error) {
     console.error('Error importing roadmap data:', error)
+    return res.status(500).json({
+      error: 'Internal server error',
+      details: error instanceof Error ? error.message : String(error)
+    })
+  }
+})
+
+// Endpoint pour mettre à jour une roadmap existante
+app.put('/update-roadmap', async (req, res) => {
+  try {
+    // Vérifier la configuration Supabase au début de la requête (pour Vercel)
+    if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY || !supabase) {
+      return res.status(500).json({
+        error: 'Server configuration error'
+      })
+    }
+
+    // Parser le body - peut être un tableau ou un objet
+    const body = req.body
+    let data
+    
+    // Support des deux formats : nouveau format (objet unique) ou ancien format (tableau)
+    if (Array.isArray(body)) {
+      data = body[0]
+    } else if (body.data && body.plan) {
+      // Nouveau format avec data et plan
+      data = body
+    } else if (body.roadmap_data) {
+      data = body.roadmap_data
+    } else {
+      data = body
+    }
+
+    // Détecter le format et normaliser les données
+    const isNewFormat = isRoadmapDataNew(data)
+    const isOldFormat = isRoadmapDataOld(data)
+
+    if (!isNewFormat && !isOldFormat) {
+      return res.status(400).json({
+        error: 'Invalid data format. Expected format with data/plan or validation/""'
+      })
+    }
+
+    // Normaliser les données selon le format
+    let roadmapContent
+    let clientData = {
+      client_id: null,
+      client_name: '',
+      client_email: '',
+      client_phone: null
+    }
+
+    if (isNewFormat) {
+      // Nouveau format : data.plan
+      roadmapContent = data.plan
+      clientData = {
+        client_id: data.data.client_id || null,
+        client_name: data.data.client_name || '',
+        client_email: data.data.client_email || '',
+        client_phone: data.data.client_phone || null
+      }
+    } else {
+      // Ancien format : validation et ''
+      roadmapContent = data['']
+      clientData = {
+        client_id: data.validation?.client_id || null,
+        client_name: roadmapContent?.header?.client_name || roadmapContent?.header?.company_name || '',
+        client_email: roadmapContent?.header?.email || '',
+        client_phone: null
+      }
+    }
+
+    // Utiliser les données du header si les données client ne sont pas dans data
+    if (!clientData.client_name && roadmapContent?.header) {
+      clientData.client_name = roadmapContent.header.client_name || roadmapContent.header.company_name
+    }
+    if (!clientData.client_email && roadmapContent?.header?.email) {
+      clientData.client_email = roadmapContent.header.email
+    }
+
+    // Requis : client_id ou client_email pour identifier le client
+    let clientProfileId = null
+
+    // Si le client_id n'existe pas, chercher par email
+    if (!clientProfileId && clientData.client_email) {
+      const { data: existingClientByEmail } = await supabase
+        .from('profiles')
+        .select('id')
+        .eq('email', clientData.client_email)
+        .maybeSingle()
+
+      if (existingClientByEmail) {
+        clientProfileId = existingClientByEmail.id
+      }
+    }
+
+    // Vérifier qu'un client existe
+    if (!clientProfileId) {
+      return res.status(404).json({
+        error: 'Client not found',
+        details: 'Aucun client trouvé avec le client_id ou client_email fourni. Utilisez /add-roadmap pour créer un nouveau client.'
+      })
+    }
+
+    // Trouver la relation coach-client existante
+    const { data: coachClientRelation } = await supabase
+      .from('coach_clients')
+      .select('id, coach_id')
+      .eq('client_id', clientProfileId)
+      .eq('status', 'active')
+      .maybeSingle()
+
+    const coachClientId = coachClientRelation?.id || null
+    const coachId = coachClientRelation?.coach_id || null
+
+    if (!coachClientId) {
+      return res.status(404).json({
+        error: 'Coach-client relation not found',
+        details: 'Aucune relation coach-client active trouvée pour ce client. Utilisez /add-roadmap pour créer une nouvelle relation.'
+      })
+    }
+
+    // Mettre à jour le profil client si des informations sont fournies
+    const updateData = {}
+    if (clientData.client_name) updateData.full_name = clientData.client_name
+    if (clientData.client_phone) updateData.phone = clientData.client_phone
+    if (roadmapContent?.header?.company_name) updateData.company = roadmapContent.header.company_name
+    if (roadmapContent?.header?.address) updateData.location = roadmapContent.header.address
+
+    if (Object.keys(updateData).length > 0) {
+      await supabase
+        .from('profiles')
+        .update(updateData)
+        .eq('id', clientProfileId)
+    }
+
+    // 1. Mettre à jour les piliers stratégiques
+    if (roadmapContent?.vision) {
+      const pillars = [
+        {
+          pillar_type: 'operations',
+          title: 'Structure & Opérations',
+          problem: roadmapContent.vision.structure?.current_situation || '',
+          actions: roadmapContent.vision.structure?.actions?.split('\n').filter(a => a.trim()) || [],
+          expert_tip: roadmapContent.vision.structure?.expert_suggestion || 'Aucune suggestion'
+        },
+        {
+          pillar_type: 'acquisition',
+          title: 'Acquisition & Vente',
+          problem: roadmapContent.vision.acquisition?.current_situation || '',
+          actions: roadmapContent.vision.acquisition?.actions?.split('\n').filter(a => a.trim()) || [],
+          expert_tip: roadmapContent.vision.acquisition?.expert_suggestion || 'Aucune suggestion'
+        },
+        {
+          pillar_type: 'vision',
+          title: 'Vision & Pilotage',
+          problem: roadmapContent.vision.vision_pilotage?.current_situation || '',
+          actions: roadmapContent.vision.vision_pilotage?.actions?.split('\n').filter(a => a.trim()) || [],
+          expert_tip: roadmapContent.vision.vision_pilotage?.expert_suggestion || 'Aucune suggestion'
+        }
+      ]
+
+      for (const pillar of pillars) {
+        const { error: pillarError } = await supabase
+          .from('roadmap_strategic_pillars')
+          .upsert({
+            coach_client_id: coachClientId,
+            pillar_type: pillar.pillar_type,
+            title: pillar.title,
+            problem: pillar.problem,
+            actions: pillar.actions,
+            expert_tip: pillar.expert_tip,
+            updated_at: new Date().toISOString()
+          }, {
+            onConflict: 'coach_client_id,pillar_type'
+          })
+
+        if (pillarError) {
+          console.error(`Error upserting pillar ${pillar.pillar_type}:`, pillarError)
+        }
+      }
+    }
+
+    // 2. Mettre à jour les notes de semaine avec les objectifs et actions
+    if (roadmapContent?.monthly_plan) {
+      const months = [
+        roadmapContent.monthly_plan.month_1,
+        roadmapContent.monthly_plan.month_2,
+        roadmapContent.monthly_plan.month_3,
+        roadmapContent.monthly_plan.month_4
+      ]
+
+      for (let monthIndex = 0; monthIndex < months.length; monthIndex++) {
+        const month = months[monthIndex]
+        if (!month) continue
+
+        const baseWeek = monthIndex * 4 + 1
+        const weekActions = [
+          month.week_1,
+          month.week_2,
+          month.week_3,
+          month.week_4
+        ]
+
+        for (let weekOffset = 0; weekOffset < 4; weekOffset++) {
+          const weekNumber = baseWeek + weekOffset
+          const weekAction = weekActions[weekOffset] || ''
+
+          // Construire la note complète pour la semaine
+          const weekNote = `OBJECTIF MOIS ${monthIndex + 1}: ${month.objective || ''}\n\nKPIs:\n${month.kpi || ''}\n\nActions semaine ${weekNumber}:\n${weekAction}`
+
+          const { error: weekNoteError } = await supabase
+            .from('coach_client_week_notes')
+            .upsert({
+              coach_client_id: coachClientId,
+              week_number: weekNumber,
+              comment: weekNote,
+              updated_at: new Date().toISOString()
+            }, {
+              onConflict: 'coach_client_id,week_number'
+            })
+
+          if (weekNoteError) {
+            console.error(`Error upserting week note for week ${weekNumber}:`, weekNoteError)
+          }
+
+          // Mettre à jour les tâches à partir des actions de la semaine
+          if (coachId) {
+            const actions = weekAction.split('\n').filter(a => a.trim() && a.trim().startsWith('-'))
+            for (const action of actions) {
+              const actionText = action.replace(/^-\s*/, '').trim()
+              if (actionText) {
+                // Vérifier si la tâche existe déjà
+                const { data: existingTasks } = await supabase
+                  .from('coaching_tasks')
+                  .select('id')
+                  .eq('client_id', clientProfileId)
+                  .eq('week_number', weekNumber)
+                  .ilike('title', `%${actionText.substring(0, 50)}%`)
+                  .limit(1)
+
+                if (!existingTasks || existingTasks.length === 0) {
+                  const { error: taskError } = await supabase
+                    .from('coaching_tasks')
+                    .insert({
+                      coach_id: coachId,
+                      client_id: clientProfileId,
+                      title: actionText.substring(0, 200),
+                      description: actionText.length > 200 ? actionText : null,
+                      week_number: weekNumber,
+                      status: 'pending',
+                      priority: 'medium'
+                    })
+
+                  if (taskError) {
+                    console.error(`Error creating task for week ${weekNumber}:`, taskError)
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+
+    // 3. Mettre à jour les objectifs stratégiques
+    if (roadmapContent?.strategic_goals) {
+      const strategicGoalsNote = `OBJECTIFS STRATÉGIQUES\n\nObjectifs 4 mois:\n${roadmapContent.strategic_goals.goals_4_months || ''}\n\nObjectifs 12 mois:\n${roadmapContent.strategic_goals.goals_12_months || ''}`
+
+      // Récupérer la note existante si elle existe
+      const { data: existingNote } = await supabase
+        .from('coach_client_week_notes')
+        .select('comment')
+        .eq('coach_client_id', coachClientId)
+        .eq('week_number', 1)
+        .maybeSingle()
+
+      const combinedNote = existingNote?.comment 
+        ? `${strategicGoalsNote}\n\n---\n\n${existingNote.comment}`
+        : strategicGoalsNote
+
+      const { error: goalsNoteError } = await supabase
+        .from('coach_client_week_notes')
+        .upsert({
+          coach_client_id: coachClientId,
+          week_number: 1,
+          comment: combinedNote,
+          updated_at: new Date().toISOString()
+        }, {
+          onConflict: 'coach_client_id,week_number'
+        })
+
+      if (goalsNoteError) {
+        console.error('Error upserting strategic goals note:', goalsNoteError)
+      }
+    }
+
+    // 4. Mettre à jour les métriques financières
+    if (roadmapContent?.header?.financials) {
+      const financials = roadmapContent.header.financials
+      
+      const revenue = parseCurrency(financials.ca)
+      const cashFlow = parseCurrency(financials.treasury)
+      const clientsCount = parseInt(financials.collaborators) || null
+      const conversionRate = parsePercentage(financials.margin)
+
+      if (revenue !== null || cashFlow !== null || clientsCount !== null) {
+        const metricsData = {
+          coach_client_id: coachClientId,
+          client_id: clientProfileId,
+          week_number: 1,
+          revenue: revenue,
+          cash_in_bank: cashFlow,
+          clients_count: clientsCount,
+          conversion_rate: conversionRate,
+          metric_date: new Date().toISOString().split('T')[0],
+          updated_at: new Date().toISOString()
+        }
+
+        // Nettoyer les valeurs null
+        Object.keys(metricsData).forEach(key => {
+          if (metricsData[key] === null || metricsData[key] === undefined) {
+            delete metricsData[key]
+          }
+        })
+
+        // Essayer d'insérer avec upsert
+        let { error: metricsError } = await supabase
+          .from('client_metrics')
+          .upsert(metricsData, {
+            onConflict: 'coach_client_id,week_number'
+          })
+
+        // Si erreur de contrainte, essayer insert simple
+        if (metricsError && metricsError.code === '42P10') {
+          const { data: existing } = await supabase
+            .from('client_metrics')
+            .select('id')
+            .eq('coach_client_id', coachClientId)
+            .eq('week_number', 1)
+            .maybeSingle()
+          
+          if (existing) {
+            const { error: updateError } = await supabase
+              .from('client_metrics')
+              .update(metricsData)
+              .eq('id', existing.id)
+            metricsError = updateError
+          } else {
+            const { error: insertError } = await supabase
+              .from('client_metrics')
+              .insert(metricsData)
+            metricsError = insertError
+          }
+        }
+
+        if (metricsError) {
+          console.error('Error upserting client metrics:', metricsError)
+        }
+      }
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: 'Roadmap updated successfully',
+      coach_client_id: coachClientId,
+      client_profile_id: clientProfileId,
+      client_id: clientProfileId,
+      coach_id: coachId
+    })
+
+  } catch (error) {
+    console.error('Error updating roadmap data:', error)
     return res.status(500).json({
       error: 'Internal server error',
       details: error instanceof Error ? error.message : String(error)
