@@ -1438,6 +1438,98 @@ app.put('/update-roadmap', async (req, res) => {
   }
 })
 
+// Endpoint pour bloquer/débloquer un utilisateur
+app.post('/block-user', async (req, res) => {
+  try {
+    // Vérifier la configuration Supabase
+    if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY || !supabase) {
+      return res.status(500).json({
+        error: 'Server configuration error'
+      })
+    }
+
+    const { email, blocked } = req.body
+
+    // Vérifier que l'email est fourni
+    if (!email) {
+      return res.status(400).json({
+        error: 'email requis'
+      })
+    }
+
+    // Le paramètre blocked est optionnel, par défaut on bloque
+    const shouldBlock = blocked !== false
+
+    // Trouver l'utilisateur par email
+    const { data: profileData, error: searchError } = await supabase
+      .from('profiles')
+      .select('id, user_id, email, full_name, role')
+      .eq('email', email)
+      .maybeSingle()
+
+    if (searchError) {
+      console.error('Erreur lors de la recherche par email:', searchError)
+    }
+
+    if (!profileData) {
+      return res.status(404).json({
+        error: 'Utilisateur non trouvé'
+      })
+    }
+
+    // Mettre à jour le statut dans la table profiles
+    const { error: updateProfileError } = await supabase
+      .from('profiles')
+      .update({
+        is_blocked: shouldBlock,
+        blocked_at: shouldBlock ? new Date().toISOString() : null,
+        updated_at: new Date().toISOString()
+      })
+      .eq('id', profileData.id)
+
+    if (updateProfileError) {
+      console.error('Erreur lors de la mise à jour du profil:', updateProfileError)
+      // On continue même si cette mise à jour échoue (le champ peut ne pas exister)
+    }
+
+    // Bannir/débannir l'utilisateur au niveau de Supabase Auth
+    if (profileData.user_id) {
+      const { error: authError } = await supabase.auth.admin.updateUserById(
+        profileData.user_id,
+        {
+          // ban_duration: 'none' pour débannir, ou une durée très longue pour bannir
+          ban_duration: shouldBlock ? '876000h' : 'none' // ~100 ans si bloqué
+        }
+      )
+
+      if (authError) {
+        console.error('Erreur lors du bannissement Auth:', authError)
+        return res.status(500).json({
+          error: 'Erreur lors du blocage de l\'utilisateur',
+          details: authError.message
+        })
+      }
+    }
+
+    console.log(`✅ Utilisateur ${profileData.email} ${shouldBlock ? 'bloqué' : 'débloqué'}`)
+
+    return res.status(200).json({
+      success: true,
+      message: shouldBlock ? 'Utilisateur bloqué avec succès' : 'Utilisateur débloqué avec succès',
+      user_id: profileData.id,
+      email: profileData.email,
+      blocked: shouldBlock
+    })
+
+  } catch (error) {
+    console.error('Error blocking user:', error)
+    return res.status(500).json({
+      error: 'Internal server error',
+      details: error instanceof Error ? error.message : String(error)
+    })
+  }
+})
+
 // Export pour Vercel Serverless Functions
 export default app
 
