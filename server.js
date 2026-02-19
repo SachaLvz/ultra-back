@@ -543,107 +543,37 @@ app.post('/add-roadmap', async (req, res) => {
       })
     }
 
-    // Trouver le coach (optionnel)
+    // Recherche coach + client en parallèle
+    const [coachResult, clientResult] = await Promise.all([
+      coachEmail
+        ? supabase.from('profiles').select('id, role').eq('email', coachEmail).maybeSingle()
+        : Promise.resolve({ data: null }),
+      clientData.client_id
+        ? supabase.from('profiles').select('id').eq('id', clientData.client_id).maybeSingle()
+        : supabase.from('profiles').select('id').eq('email', clientData.client_email).maybeSingle()
+    ])
+
     let coachId = null
-
-    // Chercher d'abord par email si un coach_email est fourni
-    if (coachEmail) {
-      console.log(`🔍 Recherche du coach par email: ${coachEmail}`)
-      
-      // D'abord chercher avec le filtre de rôle 'coach'
-      let { data: existingCoach, error: coachError } = await supabase
-        .from('profiles')
-        .select('id, email, role')
-        .eq('email', coachEmail)
-        .eq('role', 'coach')
-        .maybeSingle()
-
-      if (coachError) {
-        console.log(`⚠️  Erreur lors de la recherche du coach par email:`, coachError.message)
-      }
-
-      if (existingCoach && existingCoach.role === 'coach') {
-        coachId = existingCoach.id
-        console.log(`✅ Coach trouvé par email: ${coachId}`)
-      } else {
-        // Si aucun coach trouvé, vérifier si l'utilisateur existe avec un autre rôle
-        const { data: userExists } = await supabase
-          .from('profiles')
-          .select('id, email, role')
-          .eq('email', coachEmail)
-          .maybeSingle()
-        
-        if (userExists) {
-          console.log(`⚠️  Utilisateur trouvé avec l'email ${coachEmail} mais le rôle est '${userExists.role}' au lieu de 'coach'`)
-        } else {
-          console.log(`⚠️  Aucun utilisateur trouvé avec l'email: ${coachEmail}`)
-        }
-      }
-    } else {
-      console.log('ℹ️  Aucun email de coach fourni dans les données')
+    if (coachResult.data?.role === 'coach') {
+      coachId = coachResult.data.id
+      console.log(`✅ Coach trouvé: ${coachId}`)
+    } else if (coachResult.data) {
+      console.log(`⚠️  ${coachEmail} trouvé mais rôle '${coachResult.data.role}' ≠ 'coach'`)
+    } else if (coachEmail) {
+      console.log(`⚠️  Aucun utilisateur trouvé avec l'email: ${coachEmail}`)
     }
 
-    // Si aucun coach n'a été trouvé par email, chercher par ID comme fallback
-    if (!coachId) {
-      const providedCoachId = body.coach_id || null
-      if (providedCoachId) {
-        console.log(`🔍 Recherche du coach par ID: ${providedCoachId}`)
-        const { data: coachProfile, error: coachIdError } = await supabase
-          .from('profiles')
-          .select('id, email, role')
-          .eq('id', providedCoachId)
-          .maybeSingle()
-        
-        if (coachIdError) {
-          console.log(`⚠️  Erreur lors de la recherche du coach par ID:`, coachIdError.message)
-        }
-
-        if (coachProfile) {
-          // Vérifier que le profil a bien le rôle 'coach'
-          if (coachProfile.role === 'coach') {
-            coachId = providedCoachId
-            console.log(`✅ Coach trouvé par ID: ${coachId}`)
-          } else {
-            console.log(`⚠️  Utilisateur trouvé avec l'ID ${providedCoachId} mais le rôle est '${coachProfile.role}' au lieu de 'coach'`)
-          }
-        } else {
-          console.log(`⚠️  Aucun utilisateur trouvé avec l'ID: ${providedCoachId}`)
-        }
+    // Fallback par coach_id si pas trouvé par email
+    if (!coachId && body.coach_id) {
+      const { data: coachById } = await supabase
+        .from('profiles').select('id, role').eq('id', body.coach_id).maybeSingle()
+      if (coachById?.role === 'coach') {
+        coachId = body.coach_id
+        console.log(`✅ Coach trouvé par ID: ${coachId}`)
       }
     }
 
-    // Si aucun coach n'est trouvé, on continue sans coach (coachId reste null)
-    if (!coachId && coachEmail) {
-      console.log(`⚠️  Email de coach fourni (${coachEmail}) mais aucun coach trouvé dans la base de données`)
-    }
-
-    // Vérifier si le client existe déjà
-    let clientProfileId = null
-    
-    if (clientData.client_id) {
-      const { data: existingClient } = await supabase
-        .from('profiles')
-        .select('id')
-        .eq('id', clientData.client_id)
-        .single()
-      
-      if (existingClient) {
-        clientProfileId = existingClient.id
-      }
-    }
-
-    // Si le client_id n'existe pas, chercher par email
-    if (!clientProfileId) {
-      const { data: existingClientByEmail } = await supabase
-        .from('profiles')
-        .select('id')
-        .eq('email', clientData.client_email)
-        .single()
-
-      if (existingClientByEmail) {
-        clientProfileId = existingClientByEmail.id
-      }
-    }
+    let clientProfileId = clientResult.data?.id || null
 
     let clientPassword = null
     let isNewClient = false
@@ -706,8 +636,8 @@ app.post('/add-roadmap', async (req, res) => {
 
       console.log(`✅ Utilisateur créé avec succès: ${authData.user.id}`)
 
-      // Attendre un peu pour que le trigger de la base de données crée le profil
-      await new Promise(resolve => setTimeout(resolve, 1000))
+      // Attendre que le trigger de la base de données crée le profil
+      await new Promise(resolve => setTimeout(resolve, 500))
 
       // Créer le profil
       const { data: newProfile, error: profileError } = await supabase
@@ -736,38 +666,28 @@ app.post('/add-roadmap', async (req, res) => {
     } else {
       // Client existant : générer un nouveau mot de passe et le mettre à jour
       clientPassword = generatePassword()
-      
-      const { data: existingProfile } = await supabase
-        .from('profiles')
-        .select('user_id')
-        .eq('id', clientProfileId)
-        .single()
 
-      if (existingProfile?.user_id) {
-        const { error: updatePasswordError } = await supabase.auth.admin.updateUserById(
-          existingProfile.user_id,
-          { password: clientPassword }
-        )
-
-        if (updatePasswordError) {
-          console.error('⚠️ Erreur lors de la mise à jour du mot de passe:', updatePasswordError)
-        } else {
-          console.log('✅ Mot de passe mis à jour pour le client existant')
-        }
-      }
-
-      // Mettre à jour le profil existant
       const updateData = {}
       if (clientData.client_name) updateData.full_name = clientData.client_name
       if (clientData.client_phone) updateData.phone = clientData.client_phone
       if (roadmapContent?.header?.company_name) updateData.company = roadmapContent.header.company_name
       if (roadmapContent?.header?.address) updateData.location = roadmapContent.header.address
 
-      if (Object.keys(updateData).length > 0) {
-        await supabase
-          .from('profiles')
-          .update(updateData)
-          .eq('id', clientProfileId)
+      const { data: existingProfile } = await supabase
+        .from('profiles').select('user_id').eq('id', clientProfileId).single()
+
+      // Mise à jour auth + profil en parallèle
+      const [pwResult] = await Promise.all([
+        existingProfile?.user_id
+          ? supabase.auth.admin.updateUserById(existingProfile.user_id, { password: clientPassword })
+          : Promise.resolve({ error: null }),
+        Object.keys(updateData).length > 0
+          ? supabase.from('profiles').update(updateData).eq('id', clientProfileId)
+          : Promise.resolve()
+      ])
+
+      if (pwResult?.error) {
+        console.error('⚠️ Erreur lors de la mise à jour du mot de passe:', pwResult.error)
       }
     }
 
@@ -817,115 +737,85 @@ app.post('/add-roadmap', async (req, res) => {
       }
     }
 
-    // 1. Créer/Mettre à jour les piliers stratégiques (uniquement si coachClientId existe)
-    if (coachClientId && roadmapContent?.vision) {
-      const pillars = [
-        {
-          pillar_type: 'operations',
-          title: 'Structure & Opérations',
-          problem: roadmapContent.vision.structure?.current_situation || '',
-          actions: roadmapContent.vision.structure?.actions?.split('\n').filter(a => a.trim()) || [],
-          expert_tip: roadmapContent.vision.structure?.expert_suggestion || 'Aucune suggestion'
-        },
-        {
-          pillar_type: 'acquisition',
-          title: 'Acquisition & Vente',
-          problem: roadmapContent.vision.acquisition?.current_situation || '',
-          actions: roadmapContent.vision.acquisition?.actions?.split('\n').filter(a => a.trim()) || [],
-          expert_tip: roadmapContent.vision.acquisition?.expert_suggestion || 'Aucune suggestion'
-        },
-        {
-          pillar_type: 'vision',
-          title: 'Vision & Pilotage',
-          problem: roadmapContent.vision.vision_pilotage?.current_situation || '',
-          actions: roadmapContent.vision.vision_pilotage?.actions?.split('\n').filter(a => a.trim()) || [],
-          expert_tip: roadmapContent.vision.vision_pilotage?.expert_suggestion || 'Aucune suggestion'
-        }
-      ]
+    if (coachClientId) {
+      const now = new Date().toISOString()
 
-      for (const pillar of pillars) {
-        const { error: pillarError } = await supabase
-          .from('roadmap_strategic_pillars')
-          .upsert({
+      // Préparer le préfixe des objectifs stratégiques pour la semaine 1
+      const strategicGoalsPrefix = roadmapContent?.strategic_goals
+        ? `OBJECTIFS STRATÉGIQUES\n\nObjectifs 4 mois:\n${roadmapContent.strategic_goals.goals_4_months || ''}\n\nObjectifs 12 mois:\n${roadmapContent.strategic_goals.goals_12_months || ''}\n\n---\n\n`
+        : ''
+
+      // 1. Batch upsert des piliers stratégiques (1 requête au lieu de 3)
+      const pillarUpsert = roadmapContent?.vision ? supabase
+        .from('roadmap_strategic_pillars')
+        .upsert([
+          {
             coach_client_id: coachClientId,
-            pillar_type: pillar.pillar_type,
-            title: pillar.title,
-            problem: pillar.problem,
-            actions: pillar.actions,
-            expert_tip: pillar.expert_tip,
-            updated_at: new Date().toISOString()
-          }, {
-            onConflict: 'coach_client_id,pillar_type'
-          })
+            pillar_type: 'operations',
+            title: 'Structure & Opérations',
+            problem: roadmapContent.vision.structure?.current_situation || '',
+            actions: roadmapContent.vision.structure?.actions?.split('\n').filter(a => a.trim()) || [],
+            expert_tip: roadmapContent.vision.structure?.expert_suggestion || 'Aucune suggestion',
+            updated_at: now
+          },
+          {
+            coach_client_id: coachClientId,
+            pillar_type: 'acquisition',
+            title: 'Acquisition & Vente',
+            problem: roadmapContent.vision.acquisition?.current_situation || '',
+            actions: roadmapContent.vision.acquisition?.actions?.split('\n').filter(a => a.trim()) || [],
+            expert_tip: roadmapContent.vision.acquisition?.expert_suggestion || 'Aucune suggestion',
+            updated_at: now
+          },
+          {
+            coach_client_id: coachClientId,
+            pillar_type: 'vision',
+            title: 'Vision & Pilotage',
+            problem: roadmapContent.vision.vision_pilotage?.current_situation || '',
+            actions: roadmapContent.vision.vision_pilotage?.actions?.split('\n').filter(a => a.trim()) || [],
+            expert_tip: roadmapContent.vision.vision_pilotage?.expert_suggestion || 'Aucune suggestion',
+            updated_at: now
+          }
+        ], { onConflict: 'coach_client_id,pillar_type' }) : Promise.resolve()
 
-        if (pillarError) {
-          console.error(`Error upserting pillar ${pillar.pillar_type}:`, pillarError)
-        }
-      }
-    }
+      // 2. Construire toutes les notes de semaine + tâches en mémoire
+      const weekNoteRows = []
+      const taskRows = []
 
-    // 2. Créer les notes de semaine avec les objectifs et actions (uniquement si coachClientId existe)
-    if (coachClientId && roadmapContent?.monthly_plan) {
-      const months = [
-        roadmapContent.monthly_plan.month_1,
-        roadmapContent.monthly_plan.month_2,
-        roadmapContent.monthly_plan.month_3,
-        roadmapContent.monthly_plan.month_4
-      ]
-
-      for (let monthIndex = 0; monthIndex < months.length; monthIndex++) {
-        const month = months[monthIndex]
-        if (!month) continue
-
-        const baseWeek = monthIndex * 4 + 1
-        const weekActions = [
-          month.week_1,
-          month.week_2,
-          month.week_3,
-          month.week_4
+      if (roadmapContent?.monthly_plan) {
+        const months = [
+          roadmapContent.monthly_plan.month_1,
+          roadmapContent.monthly_plan.month_2,
+          roadmapContent.monthly_plan.month_3,
+          roadmapContent.monthly_plan.month_4
         ]
 
-        for (let weekOffset = 0; weekOffset < 4; weekOffset++) {
-          const weekNumber = baseWeek + weekOffset
-          const weekAction = weekActions[weekOffset] || ''
+        for (let monthIndex = 0; monthIndex < months.length; monthIndex++) {
+          const month = months[monthIndex]
+          if (!month) continue
 
-          // Construire la note complète pour la semaine
-          const weekNote = `OBJECTIF MOIS ${monthIndex + 1}: ${month.objective || ''}\n\nKPIs:\n${month.kpi || ''}\n\nActions semaine ${weekNumber}:\n${weekAction}`
+          const weekActions = [month.week_1, month.week_2, month.week_3, month.week_4]
 
-          const { error: weekNoteError } = await supabase
-            .from('coach_client_week_notes')
-            .upsert({
-              coach_client_id: coachClientId,
-              week_number: weekNumber,
-              comment: weekNote,
-              updated_at: new Date().toISOString()
-            }, {
-              onConflict: 'coach_client_id,week_number'
-            })
+          for (let weekOffset = 0; weekOffset < 4; weekOffset++) {
+            const weekNumber = monthIndex * 4 + weekOffset + 1
+            const weekAction = weekActions[weekOffset] || ''
+            let weekNote = `OBJECTIF MOIS ${monthIndex + 1}: ${month.objective || ''}\n\nKPIs:\n${month.kpi || ''}\n\nActions semaine ${weekNumber}:\n${weekAction}`
 
-          if (weekNoteError) {
-            console.error(`Error upserting week note for week ${weekNumber}:`, weekNoteError)
-          }
+            // Fusionner les objectifs stratégiques dans la semaine 1
+            if (weekNumber === 1 && strategicGoalsPrefix) {
+              weekNote = strategicGoalsPrefix + weekNote
+            }
 
-          // Créer des tâches à partir des actions de la semaine (uniquement si coachId existe)
-          if (coachId) {
-            const actions = weekAction.split('\n').filter(a => a.trim() && a.trim().startsWith('-'))
-            for (const action of actions) {
-              const actionText = action.replace(/^-\s*/, '').trim()
-              if (actionText) {
-                // Vérifier si la tâche existe déjà
-                const { data: existingTasks } = await supabase
-                  .from('coaching_tasks')
-                  .select('id')
-                  .eq('client_id', clientProfileId)
-                  .eq('week_number', weekNumber)
-                  .ilike('title', `%${actionText.substring(0, 50)}%`)
-                  .limit(1)
+            weekNoteRows.push({ coach_client_id: coachClientId, week_number: weekNumber, comment: weekNote, updated_at: now })
 
-                if (!existingTasks || existingTasks.length === 0) {
-                  const { error: taskError } = await supabase
-                    .from('coaching_tasks')
-                    .insert({
+            // Collecter les tâches
+            if (coachId) {
+              weekAction.split('\n')
+                .filter(a => a.trim().startsWith('-'))
+                .forEach(action => {
+                  const actionText = action.replace(/^-\s*/, '').trim()
+                  if (actionText) {
+                    taskRows.push({
                       coach_id: coachId,
                       client_id: clientProfileId,
                       title: actionText.substring(0, 200),
@@ -934,48 +824,27 @@ app.post('/add-roadmap', async (req, res) => {
                       status: 'pending',
                       priority: 'medium'
                     })
-
-                  if (taskError) {
-                    console.error(`Error creating task for week ${weekNumber}:`, taskError)
                   }
-                }
-              }
+                })
             }
           }
         }
       }
-    }
 
-    // 3. Stocker les objectifs stratégiques (uniquement si coachClientId existe)
-    if (coachClientId && roadmapContent?.strategic_goals) {
-      const strategicGoalsNote = `OBJECTIFS STRATÉGIQUES\n\nObjectifs 4 mois:\n${roadmapContent.strategic_goals.goals_4_months || ''}\n\nObjectifs 12 mois:\n${roadmapContent.strategic_goals.goals_12_months || ''}`
+      // 3. Lancer piliers + notes de semaine + tâches en parallèle (3 requêtes au lieu de ~200)
+      const weekNotesUpsert = weekNoteRows.length > 0
+        ? supabase.from('coach_client_week_notes').upsert(weekNoteRows, { onConflict: 'coach_client_id,week_number' })
+        : Promise.resolve()
 
-      // Récupérer la note existante si elle existe
-      const { data: existingNote } = await supabase
-        .from('coach_client_week_notes')
-        .select('comment')
-        .eq('coach_client_id', coachClientId)
-        .eq('week_number', 1)
-        .single()
+      const tasksInsert = taskRows.length > 0
+        ? supabase.from('coaching_tasks').insert(taskRows)
+        : Promise.resolve()
 
-      const combinedNote = existingNote?.comment 
-        ? `${strategicGoalsNote}\n\n---\n\n${existingNote.comment}`
-        : strategicGoalsNote
+      const [pillarResult, notesResult, tasksResult] = await Promise.all([pillarUpsert, weekNotesUpsert, tasksInsert])
 
-      const { error: goalsNoteError } = await supabase
-        .from('coach_client_week_notes')
-        .upsert({
-          coach_client_id: coachClientId,
-          week_number: 1,
-          comment: combinedNote,
-          updated_at: new Date().toISOString()
-        }, {
-          onConflict: 'coach_client_id,week_number'
-        })
-
-      if (goalsNoteError) {
-        console.error('Error upserting strategic goals note:', goalsNoteError)
-      }
+      if (pillarResult?.error) console.error('Error upserting pillars:', pillarResult.error)
+      if (notesResult?.error) console.error('Error upserting week notes:', notesResult.error)
+      if (tasksResult?.error) console.error('Error inserting tasks:', tasksResult.error)
     }
 
     // 4. Stocker les métriques financières (uniquement si coachClientId existe)
@@ -1126,16 +995,12 @@ app.put('/update-roadmap', async (req, res) => {
       roadmapContent = data['']
       clientData = {
         client_id: data.validation?.client_id || null,
-        client_name: roadmapContent?.header?.client_name || roadmapContent?.header?.company_name || '',
+        client_name: '',
         client_email: roadmapContent?.header?.email || '',
         client_phone: null
       }
     }
 
-    // Utiliser les données du header si les données client ne sont pas dans data
-    if (!clientData.client_name && roadmapContent?.header) {
-      clientData.client_name = roadmapContent.header.client_name || roadmapContent.header.company_name
-    }
     if (!clientData.client_email && roadmapContent?.header?.email) {
       clientData.client_email = roadmapContent.header.email
     }
@@ -1494,15 +1359,12 @@ app.post('/new-cycle-roadmap', async (req, res) => {
       roadmapContent = data['']
       clientData = {
         client_id: data.validation?.client_id || null,
-        client_name: roadmapContent?.header?.client_name || roadmapContent?.header?.company_name || '',
+        client_name: '',
         client_email: roadmapContent?.header?.email || '',
         client_phone: null
       }
     }
 
-    if (!clientData.client_name && roadmapContent?.header) {
-      clientData.client_name = roadmapContent.header.client_name || roadmapContent.header.company_name
-    }
     if (!clientData.client_email && roadmapContent?.header?.email) {
       clientData.client_email = roadmapContent.header.email
     }
@@ -1515,7 +1377,7 @@ app.post('/new-cycle-roadmap', async (req, res) => {
     const requestedCycleNumber = body.cycle_number || data.data?.cycle_number || null
 
     // Date de début du programme (format YYYY-MM-DD)
-    const rawStartDate = body.start_date || data.data?.start_date || null
+    const rawStartDate = body.start_date || data.data?.start_date || roadmapContent?.header?.start_date || null
     const programStartDate = rawStartDate && /^\d{4}-\d{2}-\d{2}$/.test(rawStartDate)
       ? rawStartDate
       : new Date().toISOString().split('T')[0]
