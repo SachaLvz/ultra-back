@@ -483,24 +483,26 @@ app.post('/add-roadmap', async (req, res) => {
       roadmapContent = data['']
       clientData = {
         client_id: data.validation?.client_id || null,
-        client_name: roadmapContent?.header?.client_name || roadmapContent?.header?.company_name || '',
+        client_name: '',
         client_email: roadmapContent?.header?.email || '',
         client_phone: null
       }
     }
 
-    // Utiliser les données du header si les données client ne sont pas dans data
-    if (!clientData.client_name && roadmapContent?.header) {
-      clientData.client_name = roadmapContent.header.client_name || roadmapContent.header.company_name
-    }
     if (!clientData.client_email && roadmapContent?.header?.email) {
       clientData.client_email = roadmapContent.header.email
     }
-    
+
     // Générer un email si manquant
     if (!clientData.client_email && clientData.client_name) {
       clientData.client_email = `${clientData.client_name.toLowerCase().replace(/\s+/g, '.')}@client.temp`
     }
+
+    // Date de début du programme (format YYYY-MM-DD)
+    const rawStartDate = body.start_date || data.data?.start_date || roadmapContent?.header?.start_date || null
+    const programStartDate = rawStartDate && /^\d{4}-\d{2}-\d{2}$/.test(rawStartDate)
+      ? rawStartDate
+      : new Date().toISOString().split('T')[0]
 
     // Chercher l'email du coach dans plusieurs endroits possibles
     let coachEmail = coachInfo.coach_email || 
@@ -791,7 +793,7 @@ app.post('/add-roadmap', async (req, res) => {
             coach_id: coachId,
             client_id: clientProfileId,
             status: 'active',
-            program_start_date: new Date().toISOString().split('T')[0],
+            program_start_date: programStartDate,
             total_weeks: 16,
             current_week: 1
           })
@@ -1512,6 +1514,12 @@ app.post('/new-cycle-roadmap', async (req, res) => {
     // Numéro de cycle fourni ou auto-détecté
     const requestedCycleNumber = body.cycle_number || data.data?.cycle_number || null
 
+    // Date de début du programme (format YYYY-MM-DD)
+    const rawStartDate = body.start_date || data.data?.start_date || null
+    const programStartDate = rawStartDate && /^\d{4}-\d{2}-\d{2}$/.test(rawStartDate)
+      ? rawStartDate
+      : new Date().toISOString().split('T')[0]
+
     // Trouver le coach
     let coachEmail = coachInfo.coach_email ||
                      body.coach_email ||
@@ -1627,7 +1635,7 @@ app.post('/new-cycle-roadmap', async (req, res) => {
         coach_id: coachId,
         client_id: clientProfileId,
         status: 'active',
-        program_start_date: new Date().toISOString().split('T')[0],
+        program_start_date: programStartDate,
         total_weeks: 16,
         current_week: 1,
         cycle_number: cycleNumber
