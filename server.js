@@ -1438,6 +1438,423 @@ app.put('/update-roadmap', async (req, res) => {
   }
 })
 
+// Endpoint pour créer une nouvelle roadmap pour un nouveau cycle
+app.post('/new-cycle-roadmap', async (req, res) => {
+  try {
+    if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY || !supabase) {
+      return res.status(500).json({ error: 'Server configuration error' })
+    }
+
+    console.log('📨 Requête reçue:', req.method, req.url)
+    console.log('📋 Body reçu:', JSON.stringify(req.body).substring(0, 200))
+
+    // Parser le body - mêmes formats supportés que /add-roadmap
+    const body = req.body
+    let data
+
+    if (Array.isArray(body)) {
+      data = body[0]
+    } else if (body.data && body.plan) {
+      data = body
+    } else if (body.roadmap_data) {
+      data = body.roadmap_data
+    } else {
+      data = body
+    }
+
+    const isNewFormat = isRoadmapDataNew(data)
+    const isOldFormat = isRoadmapDataOld(data)
+
+    if (!isNewFormat && !isOldFormat) {
+      return res.status(400).json({
+        error: 'Invalid data format. Expected format with data/plan or validation/""'
+      })
+    }
+
+    // Normaliser les données
+    let roadmapContent
+    let clientData = { client_id: null, client_name: '', client_email: '', client_phone: null }
+    let coachInfo = { coach_name: null, coach_email: null }
+
+    if (isNewFormat) {
+      roadmapContent = data.plan
+      clientData = {
+        client_id: data.data.client_id || null,
+        client_name: data.data.client_name || '',
+        client_email: data.data.client_email || '',
+        client_phone: data.data.client_phone || null
+      }
+      coachInfo = {
+        coach_name: data.data.coach_name || null,
+        coach_email: data.data.coach_email || null
+      }
+    } else {
+      roadmapContent = data['']
+      clientData = {
+        client_id: data.validation?.client_id || null,
+        client_name: roadmapContent?.header?.client_name || roadmapContent?.header?.company_name || '',
+        client_email: roadmapContent?.header?.email || '',
+        client_phone: null
+      }
+    }
+
+    if (!clientData.client_name && roadmapContent?.header) {
+      clientData.client_name = roadmapContent.header.client_name || roadmapContent.header.company_name
+    }
+    if (!clientData.client_email && roadmapContent?.header?.email) {
+      clientData.client_email = roadmapContent.header.email
+    }
+
+    if (!clientData.client_email) {
+      return res.status(400).json({ error: 'client_email is required' })
+    }
+
+    // Numéro de cycle fourni ou auto-détecté
+    const requestedCycleNumber = body.cycle_number || data.data?.cycle_number || null
+
+    // Trouver le coach
+    let coachEmail = coachInfo.coach_email ||
+                     body.coach_email ||
+                     body.data?.coach_email ||
+                     data.data?.coach_email ||
+                     roadmapContent?.header?.coach_email ||
+                     null
+
+    if (!coachInfo.coach_name) {
+      coachInfo.coach_name = body.coach_name ||
+                             body.data?.coach_name ||
+                             data.data?.coach_name ||
+                             roadmapContent?.header?.coach_name ||
+                             null
+    }
+
+    let coachId = null
+
+    if (coachEmail) {
+      const { data: existingCoach } = await supabase
+        .from('profiles')
+        .select('id, role')
+        .eq('email', coachEmail)
+        .eq('role', 'coach')
+        .maybeSingle()
+
+      if (existingCoach) {
+        coachId = existingCoach.id
+        console.log(`✅ Coach trouvé par email: ${coachId}`)
+      } else {
+        console.log(`⚠️  Aucun coach trouvé avec l'email: ${coachEmail}`)
+      }
+    }
+
+    if (!coachId) {
+      const providedCoachId = body.coach_id || null
+      if (providedCoachId) {
+        const { data: coachProfile } = await supabase
+          .from('profiles')
+          .select('id, role')
+          .eq('id', providedCoachId)
+          .maybeSingle()
+
+        if (coachProfile?.role === 'coach') {
+          coachId = providedCoachId
+          console.log(`✅ Coach trouvé par ID: ${coachId}`)
+        }
+      }
+    }
+
+    if (!coachId) {
+      return res.status(400).json({
+        error: 'coach_email or coach_id is required to create a new cycle'
+      })
+    }
+
+    // Trouver le client existant (obligatoire — pas de création ici)
+    let clientProfileId = null
+
+    if (clientData.client_id) {
+      const { data: existingClient } = await supabase
+        .from('profiles')
+        .select('id')
+        .eq('id', clientData.client_id)
+        .single()
+
+      if (existingClient) clientProfileId = existingClient.id
+    }
+
+    if (!clientProfileId) {
+      const { data: existingClientByEmail } = await supabase
+        .from('profiles')
+        .select('id')
+        .eq('email', clientData.client_email)
+        .single()
+
+      if (existingClientByEmail) clientProfileId = existingClientByEmail.id
+    }
+
+    if (!clientProfileId) {
+      return res.status(404).json({
+        error: 'Client not found. Use /add-roadmap to create a new client first.'
+      })
+    }
+
+    // Déterminer le numéro de cycle
+    let cycleNumber = requestedCycleNumber
+
+    if (!cycleNumber) {
+      let cycleQuery = supabase
+        .from('coach_clients')
+        .select('cycle_number')
+        .eq('coach_id', coachId)
+        .eq('client_id', clientProfileId)
+
+      const { data: existingCycles } = await cycleQuery
+        .order('cycle_number', { ascending: false })
+        .limit(1)
+
+      if (existingCycles && existingCycles.length > 0 && existingCycles[0].cycle_number) {
+        cycleNumber = existingCycles[0].cycle_number + 1
+      } else {
+        cycleNumber = 2 // cycle 1 est créé par /add-roadmap
+      }
+    }
+
+    console.log(`🔄 Création du cycle ${cycleNumber} pour le client ${clientData.client_email}`)
+
+    // Créer un nouveau coach_clients pour ce cycle
+    const { data: newRelation, error: relationError } = await supabase
+      .from('coach_clients')
+      .insert({
+        coach_id: coachId,
+        client_id: clientProfileId,
+        status: 'active',
+        program_start_date: new Date().toISOString().split('T')[0],
+        total_weeks: 16,
+        current_week: 1,
+        cycle_number: cycleNumber
+      })
+      .select('id')
+      .single()
+
+    if (relationError || !newRelation) {
+      console.error('Erreur lors de la création de la relation coach-client:', relationError)
+      return res.status(500).json({
+        error: 'Failed to create coach-client relation for new cycle',
+        details: relationError
+      })
+    }
+
+    const coachClientId = newRelation.id
+    console.log(`✅ Nouveau cycle ${cycleNumber} créé: coach_client_id=${coachClientId}`)
+
+    // 1. Piliers stratégiques
+    if (roadmapContent?.vision) {
+      const pillars = [
+        {
+          pillar_type: 'operations',
+          title: 'Structure & Opérations',
+          problem: roadmapContent.vision.structure?.current_situation || '',
+          actions: roadmapContent.vision.structure?.actions?.split('\n').filter(a => a.trim()) || [],
+          expert_tip: roadmapContent.vision.structure?.expert_suggestion || 'Aucune suggestion'
+        },
+        {
+          pillar_type: 'acquisition',
+          title: 'Acquisition & Vente',
+          problem: roadmapContent.vision.acquisition?.current_situation || '',
+          actions: roadmapContent.vision.acquisition?.actions?.split('\n').filter(a => a.trim()) || [],
+          expert_tip: roadmapContent.vision.acquisition?.expert_suggestion || 'Aucune suggestion'
+        },
+        {
+          pillar_type: 'vision',
+          title: 'Vision & Pilotage',
+          problem: roadmapContent.vision.vision_pilotage?.current_situation || '',
+          actions: roadmapContent.vision.vision_pilotage?.actions?.split('\n').filter(a => a.trim()) || [],
+          expert_tip: roadmapContent.vision.vision_pilotage?.expert_suggestion || 'Aucune suggestion'
+        }
+      ]
+
+      for (const pillar of pillars) {
+        const { error: pillarError } = await supabase
+          .from('roadmap_strategic_pillars')
+          .upsert({
+            coach_client_id: coachClientId,
+            pillar_type: pillar.pillar_type,
+            title: pillar.title,
+            problem: pillar.problem,
+            actions: pillar.actions,
+            expert_tip: pillar.expert_tip,
+            updated_at: new Date().toISOString()
+          }, {
+            onConflict: 'coach_client_id,pillar_type'
+          })
+
+        if (pillarError) {
+          console.error(`Error upserting pillar ${pillar.pillar_type}:`, pillarError)
+        }
+      }
+    }
+
+    // 2. Notes de semaine (plan mensuel)
+    if (roadmapContent?.monthly_plan) {
+      const months = [
+        roadmapContent.monthly_plan.month_1,
+        roadmapContent.monthly_plan.month_2,
+        roadmapContent.monthly_plan.month_3,
+        roadmapContent.monthly_plan.month_4
+      ]
+
+      for (let monthIndex = 0; monthIndex < months.length; monthIndex++) {
+        const month = months[monthIndex]
+        if (!month) continue
+
+        const baseWeek = monthIndex * 4 + 1
+        const weekActions = [month.week_1, month.week_2, month.week_3, month.week_4]
+
+        for (let weekOffset = 0; weekOffset < 4; weekOffset++) {
+          const weekNumber = baseWeek + weekOffset
+          const weekAction = weekActions[weekOffset] || ''
+          const weekNote = `OBJECTIF MOIS ${monthIndex + 1}: ${month.objective || ''}\n\nKPIs:\n${month.kpi || ''}\n\nActions semaine ${weekNumber}:\n${weekAction}`
+
+          const { error: weekNoteError } = await supabase
+            .from('coach_client_week_notes')
+            .upsert({
+              coach_client_id: coachClientId,
+              week_number: weekNumber,
+              comment: weekNote,
+              updated_at: new Date().toISOString()
+            }, {
+              onConflict: 'coach_client_id,week_number'
+            })
+
+          if (weekNoteError) {
+            console.error(`Error upserting week note for week ${weekNumber}:`, weekNoteError)
+          }
+
+          // Créer les tâches à partir des actions
+          const actions = weekAction.split('\n').filter(a => a.trim() && a.trim().startsWith('-'))
+          for (const action of actions) {
+            const actionText = action.replace(/^-\s*/, '').trim()
+            if (actionText) {
+              const { data: existingTasks } = await supabase
+                .from('coaching_tasks')
+                .select('id')
+                .eq('client_id', clientProfileId)
+                .eq('week_number', weekNumber)
+                .ilike('title', `%${actionText.substring(0, 50)}%`)
+                .limit(1)
+
+              if (!existingTasks || existingTasks.length === 0) {
+                await supabase.from('coaching_tasks').insert({
+                  coach_id: coachId,
+                  client_id: clientProfileId,
+                  title: actionText.substring(0, 200),
+                  description: actionText.length > 200 ? actionText : null,
+                  week_number: weekNumber,
+                  status: 'pending',
+                  priority: 'medium'
+                })
+              }
+            }
+          }
+        }
+      }
+    }
+
+    // 3. Objectifs stratégiques
+    if (roadmapContent?.strategic_goals) {
+      const strategicGoalsNote = `OBJECTIFS STRATÉGIQUES\n\nObjectifs 4 mois:\n${roadmapContent.strategic_goals.goals_4_months || ''}\n\nObjectifs 12 mois:\n${roadmapContent.strategic_goals.goals_12_months || ''}`
+
+      const { data: existingNote } = await supabase
+        .from('coach_client_week_notes')
+        .select('comment')
+        .eq('coach_client_id', coachClientId)
+        .eq('week_number', 1)
+        .single()
+
+      const combinedNote = existingNote?.comment
+        ? `${strategicGoalsNote}\n\n---\n\n${existingNote.comment}`
+        : strategicGoalsNote
+
+      await supabase.from('coach_client_week_notes').upsert({
+        coach_client_id: coachClientId,
+        week_number: 1,
+        comment: combinedNote,
+        updated_at: new Date().toISOString()
+      }, {
+        onConflict: 'coach_client_id,week_number'
+      })
+    }
+
+    // 4. Métriques financières
+    if (roadmapContent?.header?.financials) {
+      const financials = roadmapContent.header.financials
+      const revenue = parseCurrency(financials.ca)
+      const cashFlow = parseCurrency(financials.treasury)
+      const clientsCount = parseInt(financials.collaborators) || null
+      const conversionRate = parsePercentage(financials.margin)
+
+      if (revenue !== null || cashFlow !== null || clientsCount !== null) {
+        const metricsData = {
+          coach_client_id: coachClientId,
+          client_id: clientProfileId,
+          week_number: 1,
+          revenue,
+          cash_in_bank: cashFlow,
+          clients_count: clientsCount,
+          conversion_rate: conversionRate,
+          metric_date: new Date().toISOString().split('T')[0],
+          updated_at: new Date().toISOString()
+        }
+
+        Object.keys(metricsData).forEach(key => {
+          if (metricsData[key] === null || metricsData[key] === undefined) {
+            delete metricsData[key]
+          }
+        })
+
+        let { error: metricsError } = await supabase
+          .from('client_metrics')
+          .upsert(metricsData, { onConflict: 'coach_client_id,week_number' })
+
+        if (metricsError && metricsError.code === '42P10') {
+          const { data: existing } = await supabase
+            .from('client_metrics')
+            .select('id')
+            .eq('coach_client_id', coachClientId)
+            .eq('week_number', 1)
+            .maybeSingle()
+
+          if (existing) {
+            await supabase.from('client_metrics').update(metricsData).eq('id', existing.id)
+          } else {
+            await supabase.from('client_metrics').insert(metricsData)
+          }
+        }
+      }
+    }
+
+    console.log(`✅ Cycle ${cycleNumber} importé pour le client ${clientData.client_email}`)
+
+    return res.status(200).json({
+      success: true,
+      message: `Cycle ${cycleNumber} roadmap created successfully`,
+      coach_client_id: coachClientId,
+      client_profile_id: clientProfileId,
+      client_id: clientProfileId,
+      coach_id: coachId,
+      client_email: clientData.client_email,
+      client_name: clientData.client_name,
+      cycle_number: cycleNumber
+    })
+
+  } catch (error) {
+    console.error('Error creating new cycle roadmap:', error)
+    return res.status(500).json({
+      error: 'Internal server error',
+      details: error instanceof Error ? error.message : String(error)
+    })
+  }
+})
+
 // Endpoint pour bloquer/débloquer un utilisateur
 app.post('/block-user', async (req, res) => {
   try {
