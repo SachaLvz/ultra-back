@@ -150,13 +150,61 @@ const parsePercentage = (value) => {
   return cleaned ? parseFloat(cleaned) : null
 }
 
-// Génère un titre court (5 mots max) à partir de la première action de la semaine
+// Fallback : titre court algorithmique (5 mots max)
 const getWeekShortTitle = (weekAction) => {
   const firstLine = weekAction.split('\n').find(l => l.trim().startsWith('-'))
   const actionText = firstLine?.replace(/^-\s*/, '').trim() || ''
   if (!actionText) return ''
   const words = actionText.split(/\s+/)
   return words.slice(0, 5).join(' ') + (words.length > 5 ? '...' : '')
+}
+
+// Génère 16 titres courts via OpenAI (1 seul appel batch), fallback algorithmique
+const generateWeekTitlesOpenAI = async (monthlyPlan) => {
+  const OPENAI_API_KEY = process.env.OPENAI_API_KEY
+  if (!OPENAI_API_KEY || !monthlyPlan) return null
+
+  const months = [monthlyPlan.month_1, monthlyPlan.month_2, monthlyPlan.month_3, monthlyPlan.month_4]
+  const allWeeks = []
+  for (const month of months) {
+    allWeeks.push(month?.week_1 || '', month?.week_2 || '', month?.week_3 || '', month?.week_4 || '')
+  }
+
+  const actionsText = allWeeks.map((actions, i) => {
+    const lines = actions.split('\n').filter(a => a.trim().startsWith('-')).slice(0, 3).join(', ')
+    return `S${i + 1}: ${lines || 'vide'}`
+  }).join('\n')
+
+  try {
+    const response = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${OPENAI_API_KEY}`
+      },
+      body: JSON.stringify({
+        model: 'gpt-4o-mini',
+        max_tokens: 400,
+        messages: [{
+          role: 'user',
+          content: `Tu es un assistant de coaching business. Pour chaque semaine ci-dessous, génère un titre très court (3-5 mots en français) qui résume l'essentiel. Réponds UNIQUEMENT avec un JSON array de 16 strings, sans aucun texte autour.\n\n${actionsText}`
+        }]
+      })
+    })
+
+    if (response.ok) {
+      const data = await response.json()
+      const text = data.choices?.[0]?.message?.content?.trim()
+      const match = text?.match(/\[[\s\S]*\]/)
+      if (match) {
+        const titles = JSON.parse(match[0])
+        if (Array.isArray(titles) && titles.length === 16) return titles
+      }
+    }
+  } catch (e) {
+    console.error('⚠️ Erreur génération titres OpenAI:', e)
+  }
+  return null
 }
 
 // Fonction pour envoyer un email au client avec ses identifiants
@@ -792,6 +840,8 @@ app.post('/add-roadmap', async (req, res) => {
       const taskRows = []
 
       if (roadmapContent?.monthly_plan) {
+        const aiTitles = await generateWeekTitlesOpenAI(roadmapContent.monthly_plan)
+
         const months = [
           roadmapContent.monthly_plan.month_1,
           roadmapContent.monthly_plan.month_2,
@@ -808,7 +858,7 @@ app.post('/add-roadmap', async (req, res) => {
           for (let weekOffset = 0; weekOffset < 4; weekOffset++) {
             const weekNumber = monthIndex * 4 + weekOffset + 1
             const weekAction = weekActions[weekOffset] || ''
-            const shortWeekTitle = getWeekShortTitle(weekAction)
+            const shortWeekTitle = aiTitles?.[weekNumber - 1] || getWeekShortTitle(weekAction)
 
             weekNoteRows.push({ coach_client_id: coachClientId, week_number: weekNumber, comment: shortWeekTitle, updated_at: now })
 
@@ -1116,6 +1166,8 @@ app.put('/update-roadmap', async (req, res) => {
 
     // 2. Mettre à jour les notes de semaine avec les objectifs et actions
     if (roadmapContent?.monthly_plan) {
+      const aiTitles = await generateWeekTitlesOpenAI(roadmapContent.monthly_plan)
+
       const months = [
         roadmapContent.monthly_plan.month_1,
         roadmapContent.monthly_plan.month_2,
@@ -1138,7 +1190,7 @@ app.put('/update-roadmap', async (req, res) => {
         for (let weekOffset = 0; weekOffset < 4; weekOffset++) {
           const weekNumber = baseWeek + weekOffset
           const weekAction = weekActions[weekOffset] || ''
-          const shortWeekTitle = getWeekShortTitle(weekAction)
+          const shortWeekTitle = aiTitles?.[weekNumber - 1] || getWeekShortTitle(weekAction)
 
           const { error: weekNoteError } = await supabase
             .from('coach_client_week_notes')
@@ -1571,6 +1623,8 @@ app.post('/new-cycle-roadmap', async (req, res) => {
 
     // 2. Notes de semaine (plan mensuel)
     if (roadmapContent?.monthly_plan) {
+      const aiTitles = await generateWeekTitlesOpenAI(roadmapContent.monthly_plan)
+
       const months = [
         roadmapContent.monthly_plan.month_1,
         roadmapContent.monthly_plan.month_2,
@@ -1588,7 +1642,7 @@ app.post('/new-cycle-roadmap', async (req, res) => {
         for (let weekOffset = 0; weekOffset < 4; weekOffset++) {
           const weekNumber = baseWeek + weekOffset
           const weekAction = weekActions[weekOffset] || ''
-          const shortWeekTitle = getWeekShortTitle(weekAction)
+          const shortWeekTitle = aiTitles?.[weekNumber - 1] || getWeekShortTitle(weekAction)
 
           const { error: weekNoteError } = await supabase
             .from('coach_client_week_notes')
