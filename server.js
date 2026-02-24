@@ -799,10 +799,7 @@ app.post('/add-roadmap', async (req, res) => {
           for (let weekOffset = 0; weekOffset < 4; weekOffset++) {
             const weekNumber = monthIndex * 4 + weekOffset + 1
             const weekAction = weekActions[weekOffset] || ''
-            const shortObjective = (month.objective || '').length > 80
-              ? (month.objective || '').substring(0, 80).replace(/\s+\S*$/, '') + '...'
-              : (month.objective || '')
-            let weekNote = `OBJECTIF MOIS ${monthIndex + 1}: ${shortObjective}\n\nKPIs:\n${month.kpi || ''}\n\nActions semaine ${weekNumber}:\n${weekAction}`
+            let weekNote = weekAction
 
             // Fusionner les objectifs stratégiques dans la semaine 1
             if (weekNumber === 1 && strategicGoalsPrefix) {
@@ -1137,12 +1134,8 @@ app.put('/update-roadmap', async (req, res) => {
         for (let weekOffset = 0; weekOffset < 4; weekOffset++) {
           const weekNumber = baseWeek + weekOffset
           const weekAction = weekActions[weekOffset] || ''
-          const shortObjective = (month.objective || '').length > 80
-            ? (month.objective || '').substring(0, 80).replace(/\s+\S*$/, '') + '...'
-            : (month.objective || '')
-
-          // Construire la note complète pour la semaine
-          const weekNote = `OBJECTIF MOIS ${monthIndex + 1}: ${shortObjective}\n\nKPIs:\n${month.kpi || ''}\n\nActions semaine ${weekNumber}:\n${weekAction}`
+          // Construire la note de la semaine (uniquement les actions)
+          const weekNote = weekAction
 
           const { error: weekNoteError } = await supabase
             .from('coach_client_week_notes')
@@ -1592,10 +1585,7 @@ app.post('/new-cycle-roadmap', async (req, res) => {
         for (let weekOffset = 0; weekOffset < 4; weekOffset++) {
           const weekNumber = baseWeek + weekOffset
           const weekAction = weekActions[weekOffset] || ''
-          const shortObjective = (month.objective || '').length > 80
-            ? (month.objective || '').substring(0, 80).replace(/\s+\S*$/, '') + '...'
-            : (month.objective || '')
-          const weekNote = `OBJECTIF MOIS ${monthIndex + 1}: ${shortObjective}\n\nKPIs:\n${month.kpi || ''}\n\nActions semaine ${weekNumber}:\n${weekAction}`
+          const weekNote = weekAction
 
           const { error: weekNoteError } = await supabase
             .from('coach_client_week_notes')
