@@ -1253,38 +1253,6 @@ app.put('/update-roadmap', async (req, res) => {
       }
     }
 
-    // 3. Mettre à jour les objectifs stratégiques
-    if (roadmapContent?.strategic_goals) {
-      const strategicGoalsNote = `OBJECTIFS STRATÉGIQUES\n\nObjectifs 4 mois:\n${roadmapContent.strategic_goals.goals_4_months || ''}\n\nObjectifs 12 mois:\n${roadmapContent.strategic_goals.goals_12_months || ''}`
-
-      // Récupérer la note existante si elle existe
-      const { data: existingNote } = await supabase
-        .from('coach_client_week_notes')
-        .select('comment')
-        .eq('coach_client_id', coachClientId)
-        .eq('week_number', 1)
-        .maybeSingle()
-
-      const combinedNote = existingNote?.comment 
-        ? `${strategicGoalsNote}\n\n---\n\n${existingNote.comment}`
-        : strategicGoalsNote
-
-      const { error: goalsNoteError } = await supabase
-        .from('coach_client_week_notes')
-        .upsert({
-          coach_client_id: coachClientId,
-          week_number: 1,
-          comment: combinedNote,
-          updated_at: new Date().toISOString()
-        }, {
-          onConflict: 'coach_client_id,week_number'
-        })
-
-      if (goalsNoteError) {
-        console.error('Error upserting strategic goals note:', goalsNoteError)
-      }
-    }
-
     // 4. Mettre à jour les métriques financières
     if (roadmapContent?.header?.financials) {
       const financials = roadmapContent.header.financials
@@ -1694,31 +1662,6 @@ app.post('/new-cycle-roadmap', async (req, res) => {
           }
         }
       }
-    }
-
-    // 3. Objectifs stratégiques
-    if (roadmapContent?.strategic_goals) {
-      const strategicGoalsNote = `OBJECTIFS STRATÉGIQUES\n\nObjectifs 4 mois:\n${roadmapContent.strategic_goals.goals_4_months || ''}\n\nObjectifs 12 mois:\n${roadmapContent.strategic_goals.goals_12_months || ''}`
-
-      const { data: existingNote } = await supabase
-        .from('coach_client_week_notes')
-        .select('comment')
-        .eq('coach_client_id', coachClientId)
-        .eq('week_number', 1)
-        .single()
-
-      const combinedNote = existingNote?.comment
-        ? `${strategicGoalsNote}\n\n---\n\n${existingNote.comment}`
-        : strategicGoalsNote
-
-      await supabase.from('coach_client_week_notes').upsert({
-        coach_client_id: coachClientId,
-        week_number: 1,
-        comment: combinedNote,
-        updated_at: new Date().toISOString()
-      }, {
-        onConflict: 'coach_client_id,week_number'
-      })
     }
 
     // 4. Métriques financières
