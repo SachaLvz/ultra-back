@@ -150,6 +150,60 @@ const parsePercentage = (value) => {
   return cleaned ? parseFloat(cleaned) : null
 }
 
+// Génère 16 titres courts pour les semaines via l'IA (1 seul appel batch)
+const generateWeekTitles = async (monthlyPlan) => {
+  const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY
+  if (!ANTHROPIC_API_KEY || !monthlyPlan) return null
+
+  const months = [monthlyPlan.month_1, monthlyPlan.month_2, monthlyPlan.month_3, monthlyPlan.month_4]
+  const allWeeks = []
+  for (const month of months) {
+    allWeeks.push(
+      month?.week_1 || '',
+      month?.week_2 || '',
+      month?.week_3 || '',
+      month?.week_4 || ''
+    )
+  }
+
+  const actionsText = allWeeks.map((actions, i) => {
+    const lines = actions.split('\n').filter(a => a.trim().startsWith('-')).slice(0, 3).join(', ')
+    return `S${i + 1}: ${lines || 'vide'}`
+  }).join('\n')
+
+  try {
+    const response = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': ANTHROPIC_API_KEY,
+        'anthropic-version': '2023-06-01'
+      },
+      body: JSON.stringify({
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 400,
+        messages: [{
+          role: 'user',
+          content: `Tu es un assistant de coaching business. Pour chaque semaine ci-dessous, génère un titre très court (3-5 mots en français) qui résume l'essentiel. Réponds UNIQUEMENT avec un JSON array de 16 strings, sans aucun texte autour.\n\n${actionsText}`
+        }]
+      })
+    })
+
+    if (response.ok) {
+      const data = await response.json()
+      const text = data.content[0]?.text?.trim()
+      const match = text.match(/\[[\s\S]*\]/)
+      if (match) {
+        const titles = JSON.parse(match[0])
+        if (Array.isArray(titles) && titles.length === 16) return titles
+      }
+    }
+  } catch (e) {
+    console.error('⚠️ Erreur génération titres IA:', e)
+  }
+  return null
+}
+
 // Fonction pour envoyer un email au client avec ses identifiants
 const sendWelcomeEmail = async (clientData, clientPassword, isNewClient, roadmapContent) => {
   if (!RESEND_API_KEY || !clientData.client_email || !clientPassword) {
@@ -783,6 +837,8 @@ app.post('/add-roadmap', async (req, res) => {
       const taskRows = []
 
       if (roadmapContent?.monthly_plan) {
+        const aiTitles = await generateWeekTitles(roadmapContent.monthly_plan)
+
         const months = [
           roadmapContent.monthly_plan.month_1,
           roadmapContent.monthly_plan.month_2,
@@ -799,7 +855,8 @@ app.post('/add-roadmap', async (req, res) => {
           for (let weekOffset = 0; weekOffset < 4; weekOffset++) {
             const weekNumber = monthIndex * 4 + weekOffset + 1
             const weekAction = weekActions[weekOffset] || ''
-            let weekNote = weekAction
+            const aiTitle = aiTitles?.[weekNumber - 1]
+            let weekNote = aiTitle ? `${aiTitle}\n\n${weekAction}` : weekAction
 
             // Fusionner les objectifs stratégiques dans la semaine 1
             if (weekNumber === 1 && strategicGoalsPrefix) {
@@ -1112,6 +1169,8 @@ app.put('/update-roadmap', async (req, res) => {
 
     // 2. Mettre à jour les notes de semaine avec les objectifs et actions
     if (roadmapContent?.monthly_plan) {
+      const aiTitles = await generateWeekTitles(roadmapContent.monthly_plan)
+
       const months = [
         roadmapContent.monthly_plan.month_1,
         roadmapContent.monthly_plan.month_2,
@@ -1134,8 +1193,8 @@ app.put('/update-roadmap', async (req, res) => {
         for (let weekOffset = 0; weekOffset < 4; weekOffset++) {
           const weekNumber = baseWeek + weekOffset
           const weekAction = weekActions[weekOffset] || ''
-          // Construire la note de la semaine (uniquement les actions)
-          const weekNote = weekAction
+          const aiTitle = aiTitles?.[weekNumber - 1]
+          const weekNote = aiTitle ? `${aiTitle}\n\n${weekAction}` : weekAction
 
           const { error: weekNoteError } = await supabase
             .from('coach_client_week_notes')
@@ -1568,6 +1627,8 @@ app.post('/new-cycle-roadmap', async (req, res) => {
 
     // 2. Notes de semaine (plan mensuel)
     if (roadmapContent?.monthly_plan) {
+      const aiTitles = await generateWeekTitles(roadmapContent.monthly_plan)
+
       const months = [
         roadmapContent.monthly_plan.month_1,
         roadmapContent.monthly_plan.month_2,
@@ -1585,7 +1646,8 @@ app.post('/new-cycle-roadmap', async (req, res) => {
         for (let weekOffset = 0; weekOffset < 4; weekOffset++) {
           const weekNumber = baseWeek + weekOffset
           const weekAction = weekActions[weekOffset] || ''
-          const weekNote = weekAction
+          const aiTitle = aiTitles?.[weekNumber - 1]
+          const weekNote = aiTitle ? `${aiTitle}\n\n${weekAction}` : weekAction
 
           const { error: weekNoteError } = await supabase
             .from('coach_client_week_notes')
