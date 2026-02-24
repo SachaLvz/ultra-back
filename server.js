@@ -815,11 +815,13 @@ app.post('/add-roadmap', async (req, res) => {
                 .forEach(action => {
                   const actionText = action.replace(/^-\s*/, '').trim()
                   if (actionText) {
+                    const shortTitle = actionText.length > 80
+                      ? actionText.substring(0, 80).replace(/\s+\S*$/, '') + '...'
+                      : actionText
                     taskRows.push({
                       coach_id: coachId,
                       client_id: clientProfileId,
-                      title: actionText.substring(0, 200),
-                      description: actionText.length > 200 ? actionText : null,
+                      title: shortTitle,
                       week_number: weekNumber,
                       status: 'pending',
                       priority: 'medium'
@@ -1167,13 +1169,15 @@ app.put('/update-roadmap', async (req, res) => {
                   .limit(1)
 
                 if (!existingTasks || existingTasks.length === 0) {
+                  const shortTitle = actionText.length > 80
+                    ? actionText.substring(0, 80).replace(/\s+\S*$/, '') + '...'
+                    : actionText
                   const { error: taskError } = await supabase
                     .from('coaching_tasks')
                     .insert({
                       coach_id: coachId,
                       client_id: clientProfileId,
-                      title: actionText.substring(0, 200),
-                      description: actionText.length > 200 ? actionText : null,
+                      title: shortTitle,
                       week_number: weekNumber,
                       status: 'pending',
                       priority: 'medium'
@@ -1613,11 +1617,13 @@ app.post('/new-cycle-roadmap', async (req, res) => {
                 .limit(1)
 
               if (!existingTasks || existingTasks.length === 0) {
+                const shortTitle = actionText.length > 80
+                  ? actionText.substring(0, 80).replace(/\s+\S*$/, '') + '...'
+                  : actionText
                 await supabase.from('coaching_tasks').insert({
                   coach_id: coachId,
                   client_id: clientProfileId,
-                  title: actionText.substring(0, 200),
-                  description: actionText.length > 200 ? actionText : null,
+                  title: shortTitle,
                   week_number: weekNumber,
                   status: 'pending',
                   priority: 'medium'
