@@ -171,7 +171,7 @@ const generateWeekTitlesOpenAI = async (monthlyPlan) => {
   }
 
   const actionsText = allWeeks.map((actions, i) => {
-    const lines = actions.split('\n').filter(a => a.trim().startsWith('-')).slice(0, 3).join(', ')
+    const lines = actions.split('\n').filter(a => a.trim().startsWith('-')).join(', ')
     return `S${i + 1}: ${lines || 'vide'}`
   }).join('\n')
 
@@ -184,10 +184,11 @@ const generateWeekTitlesOpenAI = async (monthlyPlan) => {
       },
       body: JSON.stringify({
         model: 'gpt-4o-mini',
-        max_tokens: 400,
+        max_tokens: 600,
+        response_format: { type: 'json_object' },
         messages: [{
           role: 'user',
-          content: `Tu es un assistant de coaching business. Pour chaque semaine ci-dessous, génère un titre très court (3-5 mots en français) qui résume l'essentiel. Réponds UNIQUEMENT avec un JSON array de 16 strings, sans aucun texte autour.\n\n${actionsText}`
+          content: `Tu es un assistant de coaching business. Pour chaque semaine ci-dessous, génère un titre très court (3-5 mots en français) qui résume l'ensemble des tâches de la semaine. Réponds UNIQUEMENT avec un JSON objet {"titles": ["titre S1", "titre S2", ...]}, exactement 16 titres.\n\n${actionsText}`
         }]
       })
     })
@@ -195,11 +196,15 @@ const generateWeekTitlesOpenAI = async (monthlyPlan) => {
     if (response.ok) {
       const data = await response.json()
       const text = data.choices?.[0]?.message?.content?.trim()
-      const match = text?.match(/\[[\s\S]*\]/)
-      if (match) {
-        const titles = JSON.parse(match[0])
-        if (Array.isArray(titles) && titles.length === 16) return titles
+      const parsed = JSON.parse(text)
+      const titles = parsed?.titles
+      if (Array.isArray(titles) && titles.length > 0) {
+        console.log('✅ Titres OpenAI générés:', titles)
+        return titles
       }
+    } else {
+      const err = await response.text()
+      console.error('⚠️ Erreur OpenAI HTTP:', response.status, err)
     }
   } catch (e) {
     console.error('⚠️ Erreur génération titres OpenAI:', e)
