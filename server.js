@@ -809,14 +809,8 @@ app.post('/add-roadmap', async (req, res) => {
             const weekNumber = monthIndex * 4 + weekOffset + 1
             const weekAction = weekActions[weekOffset] || ''
             const shortWeekTitle = getWeekShortTitle(weekAction)
-            let weekNote = shortWeekTitle ? `${shortWeekTitle}\n\n${weekAction}` : weekAction
 
-            // Fusionner les objectifs stratégiques dans la semaine 1
-            if (weekNumber === 1 && strategicGoalsPrefix) {
-              weekNote = strategicGoalsPrefix + weekNote
-            }
-
-            weekNoteRows.push({ coach_client_id: coachClientId, week_number: weekNumber, comment: weekNote, updated_at: now })
+            weekNoteRows.push({ coach_client_id: coachClientId, week_number: weekNumber, comment: shortWeekTitle, updated_at: now })
 
             // Collecter les tâches
             if (coachId) {
@@ -1145,14 +1139,13 @@ app.put('/update-roadmap', async (req, res) => {
           const weekNumber = baseWeek + weekOffset
           const weekAction = weekActions[weekOffset] || ''
           const shortWeekTitle = getWeekShortTitle(weekAction)
-          const weekNote = shortWeekTitle ? `${shortWeekTitle}\n\n${weekAction}` : weekAction
 
           const { error: weekNoteError } = await supabase
             .from('coach_client_week_notes')
             .upsert({
               coach_client_id: coachClientId,
               week_number: weekNumber,
-              comment: weekNote,
+              comment: shortWeekTitle,
               updated_at: new Date().toISOString()
             }, {
               onConflict: 'coach_client_id,week_number'
@@ -1596,14 +1589,13 @@ app.post('/new-cycle-roadmap', async (req, res) => {
           const weekNumber = baseWeek + weekOffset
           const weekAction = weekActions[weekOffset] || ''
           const shortWeekTitle = getWeekShortTitle(weekAction)
-          const weekNote = shortWeekTitle ? `${shortWeekTitle}\n\n${weekAction}` : weekAction
 
           const { error: weekNoteError } = await supabase
             .from('coach_client_week_notes')
             .upsert({
               coach_client_id: coachClientId,
               week_number: weekNumber,
-              comment: weekNote,
+              comment: shortWeekTitle,
               updated_at: new Date().toISOString()
             }, {
               onConflict: 'coach_client_id,week_number'
