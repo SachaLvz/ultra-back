@@ -150,13 +150,34 @@ const parsePercentage = (value) => {
   return cleaned ? parseFloat(cleaned) : null
 }
 
-// Fallback : titre court algorithmique (5 mots max)
+// Fallback : titre court algorithmique (court, pas les objectifs stratégiques)
 const getWeekShortTitle = (weekAction) => {
-  const firstLine = weekAction.split('\n').find(l => l.trim().startsWith('-'))
+  if (!weekAction || typeof weekAction !== 'string') return ''
+  // Si le contenu contient "---", ne garder que la partie après le dernier "---" (souvent le vrai résumé de la semaine)
+  let content = weekAction
+  if (content.includes('---')) {
+    const afterSeparator = content.split('---').pop().trim()
+    if (afterSeparator) content = afterSeparator
+  }
+  const firstLine = content.split('\n').find(l => l.trim().startsWith('-'))
   const actionText = firstLine?.replace(/^-\s*/, '').trim() || ''
-  if (!actionText) return ''
-  const words = actionText.split(/\s+/)
-  return words.slice(0, 5).join(' ') + (words.length > 5 ? '...' : '')
+  if (!actionText) {
+    // Pas de ligne "-" : prendre la première ligne non vide
+    const firstNonEmpty = content.split('\n').find(l => l.trim().length > 0)
+    if (!firstNonEmpty) return ''
+    content = firstNonEmpty.trim()
+  } else {
+    content = actionText
+  }
+  const words = content.split(/\s+/).filter(Boolean)
+  const title = words.slice(0, 5).join(' ') + (words.length > 5 ? '...' : '')
+  return title.length > 80 ? title.slice(0, 77) + '...' : title
+}
+
+const MAX_WEEK_TITLE_LENGTH = 80
+const capWeekTitle = (title) => {
+  if (!title || typeof title !== 'string') return ''
+  return title.length <= MAX_WEEK_TITLE_LENGTH ? title : title.slice(0, MAX_WEEK_TITLE_LENGTH - 3) + '...'
 }
 
 // Génère 16 titres courts via OpenAI (1 seul appel batch), fallback algorithmique
@@ -802,11 +823,6 @@ app.post('/add-roadmap', async (req, res) => {
     if (coachClientId) {
       const now = new Date().toISOString()
 
-      // Préparer le préfixe des objectifs stratégiques pour la semaine 1
-      const strategicGoalsPrefix = roadmapContent?.strategic_goals
-        ? `OBJECTIFS STRATÉGIQUES\n\nObjectifs 4 mois:\n${roadmapContent.strategic_goals.goals_4_months || ''}\n\nObjectifs 12 mois:\n${roadmapContent.strategic_goals.goals_12_months || ''}\n\n---\n\n`
-        : ''
-
       // 1. Batch upsert des piliers stratégiques (1 requête au lieu de 3)
       const pillarUpsert = roadmapContent?.vision ? supabase
         .from('roadmap_strategic_pillars')
@@ -865,7 +881,7 @@ app.post('/add-roadmap', async (req, res) => {
             const weekAction = weekActions[weekOffset] || ''
             const shortWeekTitle = aiTitles?.[weekNumber - 1] || getWeekShortTitle(weekAction)
 
-            weekNoteRows.push({ coach_client_id: coachClientId, week_number: weekNumber, comment: shortWeekTitle, updated_at: now })
+            weekNoteRows.push({ coach_client_id: coachClientId, week_number: weekNumber, comment: capWeekTitle(shortWeekTitle), updated_at: now })
 
             // Collecter les tâches
             if (coachId) {
@@ -1202,7 +1218,7 @@ app.put('/update-roadmap', async (req, res) => {
             .upsert({
               coach_client_id: coachClientId,
               week_number: weekNumber,
-              comment: shortWeekTitle,
+              comment: capWeekTitle(shortWeekTitle),
               updated_at: new Date().toISOString()
             }, {
               onConflict: 'coach_client_id,week_number'
@@ -1622,7 +1638,7 @@ app.post('/new-cycle-roadmap', async (req, res) => {
             .upsert({
               coach_client_id: coachClientId,
               week_number: weekNumber,
-              comment: shortWeekTitle,
+              comment: capWeekTitle(shortWeekTitle),
               updated_at: new Date().toISOString()
             }, {
               onConflict: 'coach_client_id,week_number'
